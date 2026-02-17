@@ -1,125 +1,39 @@
-import { useEffect, useMemo, useState } from 'react';
-
-type ViewMode = 'plan' | 'kanban';
-
-type TaskStatus = 'Not Started' | 'In Progress' | 'Blocked' | 'In Review' | 'Done';
-type Duration = 15 | 30 | 45 | 60 | 90 | 120 | 180 | 240;
-
-type Attachment = { id: string; name: string; dataUrl: string };
-type Task = {
-  id: string;
-  title: string;
-  completed: boolean;
-  duration: Duration;
-  dueDate: string;
-  urgent: boolean;
-  important: boolean;
-  notes: string;
-  links: string[];
-  attachments: Attachment[];
-  status: TaskStatus;
-  scheduled?: {
-    weekKey: string;
-    dayIndex: number;
-    slot: number;
-  };
-  createdAt: string;
-};
-
-type Store = {
-  authName: string;
-  selectedWeekStart: string;
-  tasks: Task[];
-};
-
-const STORAGE_KEY = 'calm-weekly-dashboard-v1';
-const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-const STATUS_ORDER: TaskStatus[] = ['Not Started', 'In Progress', 'Blocked', 'In Review', 'Done'];
-const DURATIONS: Duration[] = [15, 30, 45, 60, 90, 120, 180, 240];
-const START_HOUR = 5;
-const END_HOUR = 24;
-const SLOT_MINUTES = 30;
-const SLOT_HEIGHT = 100;
-const TOTAL_SLOTS = ((END_HOUR - START_HOUR) * 60) / SLOT_MINUTES;
-
-const uid = () => Math.random().toString(36).slice(2, 11);
-
-function weekStartMonday(date: Date): Date {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  const day = (d.getDay() + 6) % 7;
-  d.setDate(d.getDate() - day);
-  return d;
-}
-
-function toLocalDateKey(date: Date): string {
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, '0');
-  const day = `${date.getDate()}`.padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function fromLocalDateKey(key: string): Date {
-  const [year, month, day] = key.split('-').map(Number);
-  return new Date(year, month - 1, day);
-}
-
-function formatWeekLabel(weekStartKey: string): string {
-  const d = fromLocalDateKey(weekStartKey);
-  return `Week of ${d.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}`;
-}
-
-function formatDayLabel(weekStartKey: string, dayIndex: number): string {
-  const d = fromLocalDateKey(weekStartKey);
-  d.setDate(d.getDate() + dayIndex);
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-
-function nowWeekStartKey() {
-  return toLocalDateKey(weekStartMonday(new Date()));
-}
-
-function loadStore(): Store {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return { authName: '', selectedWeekStart: nowWeekStartKey(), tasks: [] };
-    }
-    const parsed = JSON.parse(raw) as Store;
-    return {
-      authName: parsed.authName ?? '',
-      selectedWeekStart: parsed.selectedWeekStart ?? nowWeekStartKey(),
-      tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
-    };
-  } catch {
-    return { authName: '', selectedWeekStart: nowWeekStartKey(), tasks: [] };
-  }
-}
-
-function saveStore(store: Store) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
-}
-
-function timeLabel(slot: number) {
-  const totalMinutes = START_HOUR * 60 + slot * SLOT_MINUTES;
-  const h24 = Math.floor(totalMinutes / 60);
-  const m = totalMinutes % 60;
-  const period = h24 >= 12 ? 'PM' : 'AM';
-  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
-  return `${h12}:${m.toString().padStart(2, '0')} ${period}`;
-}
-
-function durationToSlots(duration: Duration) {
-  return Math.max(1, Math.round(duration / SLOT_MINUTES));
-}
+import { useMemo, useState } from 'react';
+import { TaskCard } from './components/TaskCard';
+import { TaskModal } from './components/TaskModal';
+import {
+  durationToSlots,
+  formatDayLabel,
+  formatWeekLabel,
+  fromLocalDateKey,
+  nowWeekStartKey,
+  timeLabel,
+  toLocalDateKey,
+  weekStartMonday,
+} from './lib/dateTime';
+import { loadStore, saveStore } from './lib/storage';
+import {
+  DAY_NAMES,
+  SLOT_HEIGHT,
+  STATUS_ORDER,
+  TOTAL_SLOTS,
+  type Store,
+  type Task,
+  type TaskStatus,
+  type ViewMode,
+  uid,
+} from './types';
 
 function App() {
   const [store, setStore] = useState<Store>(loadStore);
   const [viewMode, setViewMode] = useState<ViewMode>('plan');
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
+  const [dragOverBacklog, setDragOverBacklog] = useState(false);
+  const [dragOverKanbanStatus, setDragOverKanbanStatus] = useState<TaskStatus | null>(null);
   const [hoverSlot, setHoverSlot] = useState<{ dayIndex: number; slot: number } | null>(null);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [modalTaskId, setModalTaskId] = useState<string | null>(null);
+  const [authNameDraft, setAuthNameDraft] = useState('');
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [mobileDay, setMobileDay] = useState((new Date().getDay() + 6) % 7);
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
@@ -183,6 +97,13 @@ function App() {
     updateTask(taskId, { scheduled: undefined });
   }
 
+  function clearDragState() {
+    setDraggingTaskId(null);
+    setHoverSlot(null);
+    setDragOverBacklog(false);
+    setDragOverKanbanStatus(null);
+  }
+
   function onTaskDragStart(taskId: string) {
     setDraggingTaskId(taskId);
   }
@@ -190,15 +111,13 @@ function App() {
   function onTaskDrop(dayIndex: number, slot: number) {
     if (!draggingTaskId) return;
     scheduleTask(draggingTaskId, dayIndex, slot);
-    setDraggingTaskId(null);
-    setHoverSlot(null);
+    clearDragState();
   }
 
   function dropToBacklog() {
     if (!draggingTaskId) return;
     unscheduleTask(draggingTaskId);
-    setDraggingTaskId(null);
-    setHoverSlot(null);
+    clearDragState();
   }
 
   function weekShift(delta: number) {
@@ -212,6 +131,7 @@ function App() {
     [store.tasks],
   );
 
+  const draggingTask = draggingTaskId ? taskById.get(draggingTaskId) : undefined;
   const modalTask = modalTaskId ? taskById.get(modalTaskId) : undefined;
 
   if (!store.authName) {
@@ -222,20 +142,20 @@ function App() {
           <p>Local sign-in keeps your planning space private on this device.</p>
           <input
             placeholder="Your name"
-            value={newTaskTitle}
-            onChange={(e) => setNewTaskTitle(e.target.value)}
+            value={authNameDraft}
+            onChange={(e) => setAuthNameDraft(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && newTaskTitle.trim()) {
-                updateStore({ ...store, authName: newTaskTitle.trim() });
-                setNewTaskTitle('');
+              if (e.key === 'Enter' && authNameDraft.trim()) {
+                updateStore({ ...store, authName: authNameDraft.trim() });
+                setAuthNameDraft('');
               }
             }}
           />
           <button
             onClick={() => {
-              if (!newTaskTitle.trim()) return;
-              updateStore({ ...store, authName: newTaskTitle.trim() });
-              setNewTaskTitle('');
+              if (!authNameDraft.trim()) return;
+              updateStore({ ...store, authName: authNameDraft.trim() });
+              setAuthNameDraft('');
             }}
           >
             Continue
@@ -264,6 +184,12 @@ function App() {
           </button>
         </div>
       </header>
+      {draggingTask && (
+        <section className="drag-banner">
+          <strong>Moving:</strong> {draggingTask.title}
+          <span>Drop on calendar, backlog, or a status column.</span>
+        </section>
+      )}
 
       <section className="progress-card">
         <strong>{completedCount} / {scheduledThisWeek.length} ({progress}%)</strong>
@@ -272,8 +198,15 @@ function App() {
 
       <div className="layout">
         <aside
-          className="backlog"
-          onDragOver={(e) => e.preventDefault()}
+          className={`backlog ${dragOverBacklog ? 'drop-active' : ''}`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            if (draggingTaskId) setDragOverBacklog(true);
+          }}
+          onDragEnter={() => {
+            if (draggingTaskId) setDragOverBacklog(true);
+          }}
+          onDragLeave={() => setDragOverBacklog(false)}
           onDrop={dropToBacklog}
         >
           <h2>Backlog</h2>
@@ -281,11 +214,12 @@ function App() {
             <input
               value={newTaskTitle}
               onChange={(e) => setNewTaskTitle(e.target.value)}
-              placeholder="Add task"
+              placeholder="Add a task and press Enter"
               onKeyDown={(e) => e.key === 'Enter' && handleCreateTask()}
             />
-            <button onClick={handleCreateTask}>Add</button>
+            <button disabled={!newTaskTitle.trim()} onClick={handleCreateTask}>Add</button>
           </div>
+          <p className="helper-text">Click task title to rename. Click the card for full details.</p>
           <div className="task-list">
             {backlogTasks.map((task) => (
               <TaskCard
@@ -302,6 +236,7 @@ function App() {
                 }
                 onOpenDetails={() => setModalTaskId(task.id)}
                 onDragStart={() => onTaskDragStart(task.id)}
+                onDragEnd={clearDragState}
               />
             ))}
           </div>
@@ -312,14 +247,21 @@ function App() {
             {STATUS_ORDER.map((status) => (
               <div
                 key={status}
-                className="kanban-col"
-                onDragOver={(e) => e.preventDefault()}
+                className={`kanban-col ${dragOverKanbanStatus === status ? 'drop-active' : ''}`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (draggingTaskId) setDragOverKanbanStatus(status);
+                }}
+                onDragEnter={() => {
+                  if (draggingTaskId) setDragOverKanbanStatus(status);
+                }}
+                onDragLeave={() => setDragOverKanbanStatus(null)}
                 onDrop={() => {
                   if (!draggingTaskId) return;
                   const t = taskById.get(draggingTaskId);
                   if (!t) return;
                   updateTask(draggingTaskId, { status, completed: status === 'Done' });
-                  setDraggingTaskId(null);
+                  clearDragState();
                 }}
               >
                 <h3>{status}</h3>
@@ -340,6 +282,7 @@ function App() {
                       }
                       onOpenDetails={() => setModalTaskId(task.id)}
                       onDragStart={() => onTaskDragStart(task.id)}
+                      onDragEnd={clearDragState}
                     />
                   ))}
               </div>
@@ -347,7 +290,7 @@ function App() {
           </section>
         ) : (
           <section
-            className="timeline-wrap"
+            className={`timeline-wrap ${draggingTaskId ? 'dragging' : ''}`}
             onTouchStart={(e) => setTouchStartX(e.touches[0]?.clientX ?? null)}
             onTouchEnd={(e) => {
               const endX = e.changedTouches[0]?.clientX ?? null;
@@ -420,6 +363,7 @@ function App() {
                               }
                               onOpenDetails={() => setModalTaskId(task.id)}
                               onDragStart={() => onTaskDragStart(task.id)}
+                              onDragEnd={clearDragState}
                             />
                           </div>
                         );
@@ -444,199 +388,6 @@ function App() {
           }}
         />
       )}
-    </div>
-  );
-}
-
-type TaskCardProps = {
-  task: Task;
-  isEditing: boolean;
-  onEditToggle: (on: boolean) => void;
-  onTitleChange: (title: string) => void;
-  onToggleComplete: () => void;
-  onOpenDetails: () => void;
-  onDragStart: () => void;
-};
-
-function TaskCard(props: TaskCardProps) {
-  const { task, isEditing, onEditToggle, onTitleChange, onToggleComplete, onOpenDetails, onDragStart } = props;
-  const [draftTitle, setDraftTitle] = useState(task.title);
-  useEffect(() => {
-    setDraftTitle(task.title);
-  }, [task.title]);
-
-  return (
-    <article className={`task-card ${task.completed ? 'done' : ''}`}>
-      <div className="task-main" onClick={onOpenDetails} role="button" tabIndex={0}>
-        <label>
-          <input
-            type="checkbox"
-            checked={task.completed}
-            onChange={(e) => {
-              e.stopPropagation();
-              onToggleComplete();
-            }}
-          />
-        </label>
-
-        {isEditing ? (
-          <input
-            className="task-title-input"
-            autoFocus
-            value={draftTitle}
-            onChange={(e) => setDraftTitle(e.target.value)}
-            onBlur={() => {
-              onTitleChange(draftTitle.trim() || task.title);
-              onEditToggle(false);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                onTitleChange(draftTitle.trim() || task.title);
-                onEditToggle(false);
-              }
-              if (e.key === 'Escape') {
-                setDraftTitle(task.title);
-                onEditToggle(false);
-              }
-            }}
-          />
-        ) : (
-          <h4
-            className="task-title"
-            onClick={(e) => {
-              e.stopPropagation();
-              onEditToggle(true);
-            }}
-          >
-            {task.title}
-          </h4>
-        )}
-
-        <div className="task-meta">
-          <span>{task.duration >= 60 ? `${task.duration / 60}h` : `${task.duration}m`}</span>
-          <span>{task.status}</span>
-          {task.notes && <span>Notes</span>}
-          {task.links.length > 0 && <span>Links</span>}
-          {task.attachments.length > 0 && <span>Files</span>}
-        </div>
-      </div>
-
-      <button
-        className="drag-handle"
-        draggable
-        aria-label="Drag task"
-        onDragStart={onDragStart}
-      >
-        ⋮⋮
-      </button>
-    </article>
-  );
-}
-
-type TaskModalProps = {
-  task: Task;
-  onClose: () => void;
-  onSave: (patch: Partial<Task>) => void;
-  onDelete: () => void;
-};
-
-function TaskModal({ task, onClose, onSave, onDelete }: TaskModalProps) {
-  const [draft, setDraft] = useState<Task>(task);
-
-  function updateLink(index: number, value: string) {
-    const next = [...draft.links];
-    next[index] = value;
-    setDraft({ ...draft, links: next });
-  }
-
-  function addAttachment(fileList: FileList | null) {
-    if (!fileList || fileList.length === 0) return;
-    const files = Array.from(fileList);
-    files.forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        setDraft((current) => ({
-          ...current,
-          attachments: [
-            ...current.attachments,
-            { id: uid(), name: file.name, dataUrl: String(reader.result ?? '') },
-          ],
-        }));
-      };
-      reader.readAsDataURL(file);
-    });
-  }
-
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <section className="modal" onClick={(e) => e.stopPropagation()}>
-        <header>
-          <h3>Task Details</h3>
-          <button onClick={onClose}>Close</button>
-        </header>
-
-        <label>Title</label>
-        <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
-
-        <label>Status</label>
-        <select
-          value={draft.status}
-          onChange={(e) => {
-            const status = e.target.value as TaskStatus;
-            setDraft({ ...draft, status, completed: status === 'Done' });
-          }}
-        >
-          {STATUS_ORDER.map((status) => (
-            <option key={status} value={status}>{status}</option>
-          ))}
-        </select>
-
-        <label>Duration</label>
-        <select value={draft.duration} onChange={(e) => setDraft({ ...draft, duration: Number(e.target.value) as Duration })}>
-          {DURATIONS.map((d) => (
-            <option key={d} value={d}>{d >= 60 ? `${d / 60} hr` : `${d} min`}</option>
-          ))}
-        </select>
-
-        <label>Due Date</label>
-        <input type="date" value={draft.dueDate} onChange={(e) => setDraft({ ...draft, dueDate: e.target.value })} />
-
-        <div className="row-checks">
-          <label><input type="checkbox" checked={draft.urgent} onChange={(e) => setDraft({ ...draft, urgent: e.target.checked })} /> Urgent</label>
-          <label><input type="checkbox" checked={draft.important} onChange={(e) => setDraft({ ...draft, important: e.target.checked })} /> Important</label>
-        </div>
-
-        <label>Notes</label>
-        <textarea value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} rows={4} />
-
-        <label>Links</label>
-        <div className="links-list">
-          {draft.links.map((link, i) => (
-            <input key={i} value={link} onChange={(e) => updateLink(i, e.target.value)} placeholder="https://" />
-          ))}
-          <button onClick={() => setDraft({ ...draft, links: [...draft.links, ''] })}>Add Link</button>
-        </div>
-
-        <label>Attachments</label>
-        <input type="file" multiple onChange={(e) => addAttachment(e.target.files)} />
-        <div className="files-list">
-          {draft.attachments.map((file) => (
-            <a key={file.id} href={file.dataUrl} download={file.name}>{file.name}</a>
-          ))}
-        </div>
-
-        <footer>
-          <button className="danger" onClick={onDelete}>Delete Task</button>
-          <button
-            onClick={() => {
-              onSave(draft);
-              onClose();
-            }}
-          >
-            Save
-          </button>
-        </footer>
-      </section>
     </div>
   );
 }

@@ -111,6 +111,23 @@ select {
   border-color: transparent;
 }
 
+.drag-banner {
+  background: #e7f0e8;
+  border: 1px solid #c6d9c9;
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.drag-banner span {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
 .progress-card {
   background: var(--panel);
   border-radius: 14px;
@@ -161,6 +178,17 @@ select {
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 8px 10px;
+}
+
+.new-task-row button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.helper-text {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 0.8rem;
 }
 
 .task-list {
@@ -281,6 +309,13 @@ select {
   min-width: 220px;
 }
 
+.backlog.drop-active,
+.kanban-col.drop-active {
+  outline: 2px dashed rgba(110, 139, 123, 0.75);
+  outline-offset: -6px;
+  background: #f2f8f3;
+}
+
 .day-col.today {
   background: var(--today);
 }
@@ -332,6 +367,10 @@ select {
 .slot-hover {
   box-shadow: inset 0 0 0 2px rgba(110, 139, 123, 0.5);
   background: #edf3ee;
+}
+
+.timeline-wrap.dragging .slot-label {
+  color: #5d7667;
 }
 
 .absolute-task {
