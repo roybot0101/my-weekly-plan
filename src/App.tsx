@@ -1,4 +1,4 @@
-import { type DragEvent, useMemo, useState } from 'react';
+import { type DragEvent, useMemo, useRef, useState } from 'react';
 import { TaskCard } from './components/TaskCard';
 import { TaskModal } from './components/TaskModal';
 import {
@@ -37,6 +37,7 @@ function App() {
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [mobileDay, setMobileDay] = useState((new Date().getDay() + 6) % 7);
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
+  const dragPreviewRef = useRef<HTMLElement | null>(null);
 
   const weekKey = store.selectedWeekStart;
   const today = new Date();
@@ -98,6 +99,10 @@ function App() {
   }
 
   function clearDragState() {
+    if (dragPreviewRef.current) {
+      document.body.removeChild(dragPreviewRef.current);
+      dragPreviewRef.current = null;
+    }
     setDraggingTaskId(null);
     setHoverSlot(null);
     setDragOverBacklog(false);
@@ -112,7 +117,15 @@ function App() {
       const cardRect = taskCard.getBoundingClientRect();
       const pointerOffsetX = event.clientX - cardRect.left;
       const pointerOffsetY = event.clientY - cardRect.top;
-      event.dataTransfer.setDragImage(taskCard, pointerOffsetX, pointerOffsetY);
+      const ghost = taskCard.cloneNode(true) as HTMLElement;
+      ghost.style.position = 'fixed';
+      ghost.style.top = '-10000px';
+      ghost.style.left = '-10000px';
+      ghost.style.width = `${taskCard.offsetWidth}px`;
+      ghost.classList.add('drag-preview-card');
+      document.body.appendChild(ghost);
+      dragPreviewRef.current = ghost;
+      event.dataTransfer.setDragImage(ghost, pointerOffsetX, pointerOffsetY);
     }
 
     setDraggingTaskId(taskId);
