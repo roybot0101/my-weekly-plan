@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { type DragEvent, useEffect, useState } from 'react';
 import { type Task } from '../types';
 
 type TaskCardProps = {
@@ -8,7 +8,7 @@ type TaskCardProps = {
   onTitleChange: (title: string) => void;
   onToggleComplete: () => void;
   onOpenDetails: () => void;
-  onDragStart: () => void;
+  onDragStart: (event: DragEvent<HTMLButtonElement>) => void;
 };
 
 export function TaskCard(props: TaskCardProps) {
@@ -76,10 +76,13 @@ export function TaskCard(props: TaskCardProps) {
       </div>
 
       <button
+        type="button"
         className="drag-handle"
         draggable
         aria-label="Drag task"
         onDragStart={onDragStart}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => e.stopPropagation()}
       >
         ⋮⋮
       </button>

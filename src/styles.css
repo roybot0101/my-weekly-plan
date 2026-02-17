@@ -258,10 +258,16 @@ select {
   background: #f7f4ef;
   width: 34px;
   cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .drag-handle:active {
   cursor: grabbing;
+}
+
+.drag-preview-card {
+  box-shadow: 0 14px 30px rgba(58, 52, 44, 0.22);
 }
 
 .kanban {
