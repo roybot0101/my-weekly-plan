@@ -104,11 +104,16 @@ function App() {
     setDragOverKanbanStatus(null);
   }
 
-  function onTaskDragStart(taskId: string, event: DragEvent<HTMLButtonElement>) {
+  function onTaskDragStart(taskId: string, event: DragEvent<HTMLDivElement>) {
     event.dataTransfer.effectAllowed = 'move';
 
     const taskCard = event.currentTarget.closest('.task-card') as HTMLElement | null;
-    if (taskCard) event.dataTransfer.setDragImage(taskCard, 20, 20);
+    if (taskCard) {
+      const cardRect = taskCard.getBoundingClientRect();
+      const pointerOffsetX = event.clientX - cardRect.left;
+      const pointerOffsetY = event.clientY - cardRect.top;
+      event.dataTransfer.setDragImage(taskCard, pointerOffsetX, pointerOffsetY);
+    }
 
     setDraggingTaskId(taskId);
   }

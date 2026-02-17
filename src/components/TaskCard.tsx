@@ -8,7 +8,7 @@ type TaskCardProps = {
   onTitleChange: (title: string) => void;
   onToggleComplete: () => void;
   onOpenDetails: () => void;
-  onDragStart: (event: DragEvent<HTMLButtonElement>) => void;
+  onDragStart: (event: DragEvent<HTMLDivElement>) => void;
 };
 
 export function TaskCard(props: TaskCardProps) {
@@ -75,16 +75,16 @@ export function TaskCard(props: TaskCardProps) {
         </div>
       </div>
 
-      <button
-        type="button"
+      <div
         className="drag-handle"
         draggable
+        role="button"
         aria-label="Drag task"
         onDragStart={onDragStart}
-        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
       >
         ⋮⋮
-      </button>
+      </div>
     </article>
   );
 }
