@@ -108,19 +108,7 @@ function App() {
     event.dataTransfer.effectAllowed = 'move';
 
     const taskCard = event.currentTarget.closest('.task-card') as HTMLElement | null;
-    if (taskCard) {
-      const ghost = taskCard.cloneNode(true) as HTMLElement;
-      ghost.classList.add('drag-preview-card');
-      ghost.style.position = 'fixed';
-      ghost.style.top = '-9999px';
-      ghost.style.left = '-9999px';
-      ghost.style.width = `${taskCard.offsetWidth}px`;
-      document.body.appendChild(ghost);
-      event.dataTransfer.setDragImage(ghost, 20, 20);
-      requestAnimationFrame(() => {
-        document.body.removeChild(ghost);
-      });
-    }
+    if (taskCard) event.dataTransfer.setDragImage(taskCard, 20, 20);
 
     setDraggingTaskId(taskId);
   }

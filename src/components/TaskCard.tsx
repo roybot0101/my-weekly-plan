@@ -81,7 +81,6 @@ export function TaskCard(props: TaskCardProps) {
         draggable
         aria-label="Drag task"
         onDragStart={onDragStart}
-        onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => e.stopPropagation()}
       >
         ⋮⋮
