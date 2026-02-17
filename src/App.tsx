@@ -38,6 +38,16 @@ function App() {
   const [mobileDay, setMobileDay] = useState((new Date().getDay() + 6) % 7);
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
   const dragPreviewRef = useRef<HTMLElement | null>(null);
+  const scrollLockRef = useRef<{
+    scrollX: number;
+    scrollY: number;
+    position: string;
+    top: string;
+    left: string;
+    right: string;
+    width: string;
+    overflow: string;
+  } | null>(null);
 
   const weekKey = store.selectedWeekStart;
   const today = new Date();
@@ -100,17 +110,59 @@ function App() {
 
   function clearDragState() {
     if (dragPreviewRef.current) {
-      document.body.removeChild(dragPreviewRef.current);
+      if (document.body.contains(dragPreviewRef.current)) {
+        document.body.removeChild(dragPreviewRef.current);
+      }
       dragPreviewRef.current = null;
     }
+    unlockPageScroll();
     setDraggingTaskId(null);
     setHoverSlot(null);
     setDragOverBacklog(false);
     setDragOverKanbanStatus(null);
   }
 
+  function lockPageScroll() {
+    if (scrollLockRef.current) return;
+    const body = document.body;
+    const html = document.documentElement;
+    scrollLockRef.current = {
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+      position: body.style.position,
+      top: body.style.top,
+      left: body.style.left,
+      right: body.style.right,
+      width: body.style.width,
+      overflow: body.style.overflow,
+    };
+
+    body.style.position = 'fixed';
+    body.style.top = `-${window.scrollY}px`;
+    body.style.left = `-${window.scrollX}px`;
+    body.style.right = '0';
+    body.style.width = '100%';
+    body.style.overflow = 'hidden';
+    html.style.scrollBehavior = 'auto';
+  }
+
+  function unlockPageScroll() {
+    if (!scrollLockRef.current) return;
+    const body = document.body;
+    const saved = scrollLockRef.current;
+    body.style.position = saved.position;
+    body.style.top = saved.top;
+    body.style.left = saved.left;
+    body.style.right = saved.right;
+    body.style.width = saved.width;
+    body.style.overflow = saved.overflow;
+    window.scrollTo(saved.scrollX, saved.scrollY);
+    scrollLockRef.current = null;
+  }
+
   function onTaskDragStart(taskId: string, event: DragEvent<HTMLDivElement>) {
     event.dataTransfer.effectAllowed = 'move';
+    lockPageScroll();
 
     const taskCard = event.currentTarget.closest('.task-card') as HTMLElement | null;
     if (taskCard) {
@@ -189,7 +241,7 @@ function App() {
   }
 
   return (
-    <div className="app grain-bg">
+    <div className="app grain-bg" onDragEnd={clearDragState}>
       <header className="top-bar">
         <div>
           <h1>Weekly Planning Dashboard</h1>
