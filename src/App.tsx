@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { type DragEvent, useMemo, useState } from 'react';
 import { TaskCard } from './components/TaskCard';
 import { TaskModal } from './components/TaskModal';
 import {
@@ -104,19 +104,27 @@ function App() {
     setDragOverKanbanStatus(null);
   }
 
-  function onTaskDragStart(taskId: string) {
+  function onTaskDragStart(taskId: string, event: DragEvent<HTMLButtonElement>) {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/task-id', taskId);
     setDraggingTaskId(taskId);
   }
 
-  function onTaskDrop(dayIndex: number, slot: number) {
-    if (!draggingTaskId) return;
-    scheduleTask(draggingTaskId, dayIndex, slot);
+  function getDroppedTaskId(event: DragEvent<HTMLElement>) {
+    return event.dataTransfer.getData('text/task-id') || draggingTaskId;
+  }
+
+  function onTaskDrop(dayIndex: number, slot: number, event: DragEvent<HTMLDivElement>) {
+    const droppedTaskId = getDroppedTaskId(event);
+    if (!droppedTaskId) return;
+    scheduleTask(droppedTaskId, dayIndex, slot);
     clearDragState();
   }
 
-  function dropToBacklog() {
-    if (!draggingTaskId) return;
-    unscheduleTask(draggingTaskId);
+  function dropToBacklog(event: DragEvent<HTMLElement>) {
+    const droppedTaskId = getDroppedTaskId(event);
+    if (!droppedTaskId) return;
+    unscheduleTask(droppedTaskId);
     clearDragState();
   }
 
@@ -201,13 +209,14 @@ function App() {
           className={`backlog ${dragOverBacklog ? 'drop-active' : ''}`}
           onDragOver={(e) => {
             e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
             if (draggingTaskId) setDragOverBacklog(true);
           }}
           onDragEnter={() => {
             if (draggingTaskId) setDragOverBacklog(true);
           }}
           onDragLeave={() => setDragOverBacklog(false)}
-          onDrop={dropToBacklog}
+          onDrop={(e) => dropToBacklog(e)}
         >
           <h2>Backlog</h2>
           <div className="new-task-row">
@@ -235,7 +244,7 @@ function App() {
                   })
                 }
                 onOpenDetails={() => setModalTaskId(task.id)}
-                onDragStart={() => onTaskDragStart(task.id)}
+                onDragStart={(e) => onTaskDragStart(task.id, e)}
                 onDragEnd={clearDragState}
               />
             ))}
@@ -250,17 +259,19 @@ function App() {
                 className={`kanban-col ${dragOverKanbanStatus === status ? 'drop-active' : ''}`}
                 onDragOver={(e) => {
                   e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
                   if (draggingTaskId) setDragOverKanbanStatus(status);
                 }}
                 onDragEnter={() => {
                   if (draggingTaskId) setDragOverKanbanStatus(status);
                 }}
                 onDragLeave={() => setDragOverKanbanStatus(null)}
-                onDrop={() => {
-                  if (!draggingTaskId) return;
-                  const t = taskById.get(draggingTaskId);
+                onDrop={(e) => {
+                  const droppedTaskId = getDroppedTaskId(e);
+                  if (!droppedTaskId) return;
+                  const t = taskById.get(droppedTaskId);
                   if (!t) return;
-                  updateTask(draggingTaskId, { status, completed: status === 'Done' });
+                  updateTask(droppedTaskId, { status, completed: status === 'Done' });
                   clearDragState();
                 }}
               >
@@ -281,7 +292,7 @@ function App() {
                         })
                       }
                       onOpenDetails={() => setModalTaskId(task.id)}
-                      onDragStart={() => onTaskDragStart(task.id)}
+                      onDragStart={(e) => onTaskDragStart(task.id, e)}
                       onDragEnd={clearDragState}
                     />
                   ))}
@@ -334,9 +345,10 @@ function App() {
                             style={{ height: SLOT_HEIGHT }}
                             onDragOver={(e) => {
                               e.preventDefault();
+                              e.dataTransfer.dropEffect = 'move';
                               setHoverSlot({ dayIndex, slot });
                             }}
-                            onDrop={() => onTaskDrop(dayIndex, slot)}
+                            onDrop={(e) => onTaskDrop(dayIndex, slot, e)}
                             onDragLeave={() => setHoverSlot(null)}
                           >
                             <span className="slot-label">{timeLabel(slot)}</span>
@@ -362,7 +374,7 @@ function App() {
                                 })
                               }
                               onOpenDetails={() => setModalTaskId(task.id)}
-                              onDragStart={() => onTaskDragStart(task.id)}
+                              onDragStart={(e) => onTaskDragStart(task.id, e)}
                               onDragEnd={clearDragState}
                             />
                           </div>

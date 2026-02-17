@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { type DragEvent, useEffect, useState } from 'react';
 import { type Task } from '../types';
 
 type TaskCardProps = {
@@ -8,7 +8,7 @@ type TaskCardProps = {
   onTitleChange: (title: string) => void;
   onToggleComplete: () => void;
   onOpenDetails: () => void;
-  onDragStart: () => void;
+  onDragStart: (event: DragEvent<HTMLButtonElement>) => void;
   onDragEnd: () => void;
 };
 
