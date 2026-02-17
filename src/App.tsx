@@ -106,12 +106,19 @@ function App() {
 
   function onTaskDragStart(taskId: string, event: DragEvent<HTMLButtonElement>) {
     event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', taskId);
     event.dataTransfer.setData('text/task-id', taskId);
     setDraggingTaskId(taskId);
   }
 
   function getDroppedTaskId(event: DragEvent<HTMLElement>) {
-    return event.dataTransfer.getData('text/task-id') || draggingTaskId;
+    return event.dataTransfer.getData('text/task-id') || event.dataTransfer.getData('text/plain') || draggingTaskId;
+  }
+
+  function onGlobalDragEnd() {
+    window.setTimeout(() => {
+      clearDragState();
+    }, 0);
   }
 
   function onTaskDrop(dayIndex: number, slot: number, event: DragEvent<HTMLDivElement>) {
@@ -174,7 +181,7 @@ function App() {
   }
 
   return (
-    <div className="app grain-bg">
+    <div className="app grain-bg" onDragEnd={onGlobalDragEnd}>
       <header className="top-bar">
         <div>
           <h1>Weekly Planning Dashboard</h1>
@@ -216,7 +223,10 @@ function App() {
             if (draggingTaskId) setDragOverBacklog(true);
           }}
           onDragLeave={() => setDragOverBacklog(false)}
-          onDrop={(e) => dropToBacklog(e)}
+          onDrop={(e) => {
+            e.preventDefault();
+            dropToBacklog(e);
+          }}
         >
           <h2>Backlog</h2>
           <div className="new-task-row">
@@ -245,7 +255,6 @@ function App() {
                 }
                 onOpenDetails={() => setModalTaskId(task.id)}
                 onDragStart={(e) => onTaskDragStart(task.id, e)}
-                onDragEnd={clearDragState}
               />
             ))}
           </div>
@@ -267,6 +276,7 @@ function App() {
                 }}
                 onDragLeave={() => setDragOverKanbanStatus(null)}
                 onDrop={(e) => {
+                  e.preventDefault();
                   const droppedTaskId = getDroppedTaskId(e);
                   if (!droppedTaskId) return;
                   const t = taskById.get(droppedTaskId);
@@ -293,7 +303,6 @@ function App() {
                       }
                       onOpenDetails={() => setModalTaskId(task.id)}
                       onDragStart={(e) => onTaskDragStart(task.id, e)}
-                      onDragEnd={clearDragState}
                     />
                   ))}
               </div>
@@ -375,7 +384,6 @@ function App() {
                               }
                               onOpenDetails={() => setModalTaskId(task.id)}
                               onDragStart={(e) => onTaskDragStart(task.id, e)}
-                              onDragEnd={clearDragState}
                             />
                           </div>
                         );

@@ -9,11 +9,10 @@ type TaskCardProps = {
   onToggleComplete: () => void;
   onOpenDetails: () => void;
   onDragStart: (event: DragEvent<HTMLButtonElement>) => void;
-  onDragEnd: () => void;
 };
 
 export function TaskCard(props: TaskCardProps) {
-  const { task, isEditing, onEditToggle, onTitleChange, onToggleComplete, onOpenDetails, onDragStart, onDragEnd } = props;
+  const { task, isEditing, onEditToggle, onTitleChange, onToggleComplete, onOpenDetails, onDragStart } = props;
   const [draftTitle, setDraftTitle] = useState(task.title);
 
   useEffect(() => {
@@ -81,7 +80,6 @@ export function TaskCard(props: TaskCardProps) {
         draggable
         aria-label="Drag task"
         onDragStart={onDragStart}
-        onDragEnd={onDragEnd}
       >
         ⋮⋮
       </button>
