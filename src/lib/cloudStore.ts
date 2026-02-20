@@ -102,6 +102,17 @@ export async function signUp(email: string, password: string) {
   if (error) throw error;
 }
 
+export async function signInWithOAuth(provider: 'google' | 'apple' | 'facebook') {
+  const client = requireClient();
+  const { error } = await client.auth.signInWithOAuth({
+    provider,
+    options: {
+      redirectTo: `${window.location.origin}/`,
+    },
+  });
+  if (error) throw error;
+}
+
 export async function signOut() {
   const client = requireClient();
   const { error } = await client.auth.signOut();

@@ -973,6 +973,30 @@ textarea {
   flex-wrap: wrap;
 }
 
+.oauth-divider {
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.84rem;
+  margin: 2px 0;
+}
+
+.oauth-divider::before,
+.oauth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+.oauth-divider span {
+  padding: 0 10px;
+}
+
+.oauth-actions button {
+  flex: 1 1 180px;
+}
+
 .error-banner {
   border: 1px solid #e2b8ac;
   background: #f8ebe6;

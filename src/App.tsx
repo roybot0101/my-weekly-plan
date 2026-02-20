@@ -22,6 +22,7 @@ import {
   signIn,
   signOut,
   signUp,
+  signInWithOAuth,
   updateBacklogOrder,
   updateKanbanOrder,
   updateSelectedWeekStart,
@@ -719,6 +720,17 @@ function App() {
     }
   }
 
+  async function handleOAuth(provider: 'google' | 'apple' | 'facebook') {
+    setInitializing(true);
+    try {
+      await signInWithOAuth(provider);
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'OAuth sign-in failed.');
+      setInitializing(false);
+    }
+  }
+
   if (!hasSupabaseEnv) {
     return (
       <div className="login-shell grain-bg">
@@ -785,6 +797,16 @@ function App() {
             >
               {authMode === 'sign-up' ? 'Use Existing Account' : 'Create New Account'}
             </button>
+          </div>
+
+          <div className="oauth-divider" role="separator" aria-label="OAuth sign-in options">
+            <span>or continue with</span>
+          </div>
+
+          <div className="auth-actions oauth-actions">
+            <button onClick={() => void handleOAuth('google')}>Continue with Google</button>
+            <button onClick={() => void handleOAuth('apple')}>Continue with Apple</button>
+            <button onClick={() => void handleOAuth('facebook')}>Continue with Facebook</button>
           </div>
         </main>
       </div>
