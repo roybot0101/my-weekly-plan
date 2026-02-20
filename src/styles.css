@@ -132,6 +132,11 @@ textarea {
   margin: 0;
 }
 
+.login-title-script {
+  font-family: 'Pacifico', cursive;
+  font-weight: 400;
+}
+
 .login-card p {
   margin: 0;
   color: var(--muted);
@@ -995,6 +1000,55 @@ textarea {
 
 .oauth-actions button {
   flex: 1 1 180px;
+}
+
+.oauth-brand-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.oauth-brand-stack .oauth-button {
+  width: 100%;
+  min-height: 62px;
+  border-radius: 14px;
+  border: 1px solid #d8d8d8;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 18px;
+  gap: 14px;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.oauth-button .oauth-icon {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+}
+
+.oauth-facebook {
+  background: #1877f2;
+  border-color: #1877f2;
+  color: #ffffff;
+}
+
+.oauth-facebook:hover {
+  background: #156ce0;
+  border-color: #156ce0;
+}
+
+.oauth-google {
+  background: #f2f2f2;
+  border-color: #e6e6e6;
+  color: #595959;
+}
+
+.oauth-google:hover {
+  background: #ececec;
 }
 
 .error-banner {

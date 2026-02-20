@@ -720,7 +720,7 @@ function App() {
     }
   }
 
-  async function handleOAuth(provider: 'google' | 'apple' | 'facebook') {
+  async function handleOAuth(provider: 'google' | 'facebook') {
     setInitializing(true);
     try {
       await signInWithOAuth(provider);
@@ -733,7 +733,7 @@ function App() {
 
   if (!hasSupabaseEnv) {
     return (
-      <div className="login-shell grain-bg">
+      <div className="login-shell">
         <main className="login-card">
           <h1>Supabase Required</h1>
           <p>Add environment variables to enable account-based auth and cloud persistence.</p>
@@ -746,7 +746,7 @@ function App() {
 
   if (initializing || loadingPlanner) {
     return (
-      <div className="login-shell grain-bg">
+      <div className="login-shell">
         <main className="login-card">
           <h1>Loading Planner</h1>
           <p>Connecting to your workspace...</p>
@@ -757,9 +757,9 @@ function App() {
 
   if (!userId) {
     return (
-      <div className="login-shell grain-bg">
+      <div className="login-shell">
         <main className="login-card">
-          <h1>Calm Weekly Planner</h1>
+          <h1 className="login-title-script">My Weekly Plan</h1>
           <p>Sign in to keep tasks synced to your account.</p>
 
           {errorMessage && <div className="error-banner">{errorMessage}</div>}
@@ -803,10 +803,42 @@ function App() {
             <span>or continue with</span>
           </div>
 
-          <div className="auth-actions oauth-actions">
-            <button onClick={() => void handleOAuth('google')}>Continue with Google</button>
-            <button onClick={() => void handleOAuth('apple')}>Continue with Apple</button>
-            <button onClick={() => void handleOAuth('facebook')}>Continue with Facebook</button>
+          <div className="auth-actions oauth-actions oauth-brand-stack">
+            <button className="oauth-button oauth-facebook" onClick={() => void handleOAuth('facebook')}>
+              <span className="oauth-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
+                  <circle cx="12" cy="12" r="12" fill="#ffffff" />
+                  <path
+                    d="M13.37 8.35h1.64V5.5h-1.93c-2.52 0-3.9 1.54-3.9 4.1V11H7v2.68h2.18v4.82h2.93v-4.82h2.43l.39-2.68h-2.82V9.89c0-.88.3-1.54 1.26-1.54Z"
+                    fill="#1877f2"
+                  />
+                </svg>
+              </span>
+              <span>Continue with Facebook</span>
+            </button>
+            <button className="oauth-button oauth-google" onClick={() => void handleOAuth('google')}>
+              <span className="oauth-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
+                  <path
+                    d="M21.99 12.23c0-.78-.07-1.53-.2-2.25H12v4.26h5.61a4.8 4.8 0 0 1-2.08 3.16v2.63h3.37c1.97-1.82 3.09-4.5 3.09-7.8Z"
+                    fill="#4285F4"
+                  />
+                  <path
+                    d="M12 22.4c2.8 0 5.15-.93 6.86-2.5l-3.37-2.63c-.94.63-2.14 1.01-3.49 1.01-2.68 0-4.95-1.81-5.76-4.24H2.77v2.72A10.38 10.38 0 0 0 12 22.4Z"
+                    fill="#34A853"
+                  />
+                  <path
+                    d="M6.24 14.04a6.23 6.23 0 0 1 0-4.08V7.24H2.77a10.38 10.38 0 0 0 0 9.52l3.47-2.72Z"
+                    fill="#FBBC05"
+                  />
+                  <path
+                    d="M12 5.72c1.52 0 2.88.52 3.95 1.55l2.97-2.97C17.14 2.66 14.79 1.6 12 1.6A10.38 10.38 0 0 0 2.77 7.24l3.47 2.72c.8-2.43 3.08-4.24 5.76-4.24Z"
+                    fill="#EA4335"
+                  />
+                </svg>
+              </span>
+              <span>Continue with Google</span>
+            </button>
           </div>
         </main>
       </div>
