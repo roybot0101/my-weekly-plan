@@ -1,442 +1,1091 @@
-import { type DragEvent, useMemo, useRef, useState } from 'react';
+import { type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { Calendar, CalendarDays, Check, ChevronLeft, ChevronRight, Columns3, Plus } from 'lucide-react';
 import { TaskCard } from './components/TaskCard';
 import { TaskModal } from './components/TaskModal';
 import {
+  addWeeks,
   durationToSlots,
   formatDayLabel,
   formatWeekLabel,
-  fromLocalDateKey,
   nowWeekStartKey,
   timeLabel,
   toLocalDateKey,
   weekStartMonday,
 } from './lib/dateTime';
-import { loadStore, saveStore } from './lib/storage';
 import {
-  DAY_NAMES,
-  SLOT_HEIGHT,
-  STATUS_ORDER,
-  TOTAL_SLOTS,
-  type Store,
-  type Task,
-  type TaskStatus,
-  type ViewMode,
-  uid,
-} from './types';
+  createTask,
+  deleteTask,
+  getSessionUser,
+  loadPlannerData,
+  makeScheduled,
+  onAuthStateChange,
+  signIn,
+  signOut,
+  signUp,
+  updateBacklogOrder,
+  updateKanbanOrder,
+  updateSelectedWeekStart,
+  updateTask,
+} from './lib/cloudStore';
+import { hasSupabaseEnv } from './lib/supabase';
+import { DAY_NAMES, SLOT_HEIGHT, STATUS_ORDER, TOTAL_SLOTS, type Duration, type Task, type TaskStatus, type ViewMode } from './types';
+
+type DropTarget = { dayIndex: number; slot: number } | null;
+type AuthMode = 'sign-in' | 'sign-up';
+const SCHEDULED_CARD_TOP_OFFSET = 12;
+const SCHEDULED_CARD_BOTTOM_GAP = 6;
+type KanbanDropTarget = { status: TaskStatus; insertIndex: number } | null;
 
 function App() {
-  const [store, setStore] = useState<Store>(loadStore);
+  const [initializing, setInitializing] = useState(true);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string>('');
+  const [authMode, setAuthMode] = useState<AuthMode>('sign-in');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [backlogOrder, setBacklogOrder] = useState<string[]>([]);
+  const [kanbanOrder, setKanbanOrder] = useState<string[]>([]);
+  const [selectedWeekStart, setSelectedWeekStart] = useState(nowWeekStartKey());
+  const [loadingPlanner, setLoadingPlanner] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savingDotCount, setSavingDotCount] = useState(0);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
   const [viewMode, setViewMode] = useState<ViewMode>('plan');
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
+  const [dragCursor, setDragCursor] = useState<{ x: number; y: number } | null>(null);
+  const [dragBox, setDragBox] = useState<{ width: number; height: number; offsetX: number; offsetY: number } | null>(null);
+  const [dropTarget, setDropTarget] = useState<DropTarget>(null);
+  const [shiftPreviewPatches, setShiftPreviewPatches] = useState<Array<{ taskId: string; dayIndex: number; slot: number }>>(
+    [],
+  );
   const [dragOverBacklog, setDragOverBacklog] = useState(false);
-  const [dragOverKanbanStatus, setDragOverKanbanStatus] = useState<TaskStatus | null>(null);
-  const [hoverSlot, setHoverSlot] = useState<{ dayIndex: number; slot: number } | null>(null);
-  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
-  const [modalTaskId, setModalTaskId] = useState<string | null>(null);
-  const [authNameDraft, setAuthNameDraft] = useState('');
+  const [backlogInsertIndex, setBacklogInsertIndex] = useState<number | null>(null);
+  const [dragOverStatus, setDragOverStatus] = useState<TaskStatus | null>(null);
+  const [kanbanDropTarget, setKanbanDropTarget] = useState<KanbanDropTarget>(null);
+  const [taskInModal, setTaskInModal] = useState<string | null>(null);
+  const [resizingTaskId, setResizingTaskId] = useState<string | null>(null);
+  const [resizePreviewDuration, setResizePreviewDuration] = useState<Duration | null>(null);
+  const [editingTitleTaskId, setEditingTitleTaskId] = useState<string | null>(null);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [mobileDay, setMobileDay] = useState((new Date().getDay() + 6) % 7);
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
-  const dragPreviewRef = useRef<HTMLElement | null>(null);
-  const scrollLockRef = useRef<{
-    scrollX: number;
-    scrollY: number;
-    position: string;
-    top: string;
-    left: string;
-    right: string;
-    width: string;
-    overflow: string;
-  } | null>(null);
+  const draggingTaskIdRef = useRef<string | null>(null);
 
-  const weekKey = store.selectedWeekStart;
-  const today = new Date();
-  const todayWeek = toLocalDateKey(weekStartMonday(today));
-  const todayDayIndex = (today.getDay() + 6) % 7;
+  const weekKey = selectedWeekStart;
+  const now = new Date();
+  const todayWeekKey = toLocalDateKey(weekStartMonday(now));
+  const todayDayIndex = (now.getDay() + 6) % 7;
 
-  const backlogTasks = useMemo(
-    () => store.tasks.filter((t) => !t.scheduled),
-    [store.tasks],
-  );
+  const taskById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
 
-  const scheduledThisWeek = useMemo(
-    () => store.tasks.filter((t) => t.scheduled?.weekKey === weekKey),
-    [store.tasks, weekKey],
-  );
-
-  const completedCount = scheduledThisWeek.filter((t) => t.completed).length;
-  const progress = scheduledThisWeek.length === 0 ? 0 : Math.round((completedCount / scheduledThisWeek.length) * 100);
-
-  function updateStore(next: Store) {
-    setStore(next);
-    saveStore(next);
-  }
-
-  function updateTask(taskId: string, patch: Partial<Task>) {
-    updateStore({
-      ...store,
-      tasks: store.tasks.map((t) => (t.id === taskId ? { ...t, ...patch } : t)),
+  function sortTasksByOrder(taskList: Task[], orderedIds: string[]) {
+    const rank = new Map(orderedIds.map((id, index) => [id, index]));
+    return [...taskList].sort((a, b) => {
+      const aRank = rank.get(a.id);
+      const bRank = rank.get(b.id);
+      if (aRank === undefined && bRank === undefined) return a.createdAt < b.createdAt ? 1 : -1;
+      if (aRank === undefined) return 1;
+      if (bRank === undefined) return -1;
+      return aRank - bRank;
     });
   }
 
-  function handleCreateTask() {
-    const title = newTaskTitle.trim();
-    if (!title) return;
-    const task: Task = {
-      id: uid(),
-      title,
-      completed: false,
-      duration: 30,
-      dueDate: '',
-      urgent: false,
-      important: false,
-      notes: '',
-      links: [],
-      attachments: [],
-      status: 'Not Started',
-      createdAt: new Date().toISOString(),
+  const backlogTasks = useMemo(() => {
+    const backlog = tasks.filter((task) => !task.scheduled);
+    return sortTasksByOrder(backlog, backlogOrder);
+  }, [tasks, backlogOrder]);
+
+  const weekTasks = useMemo(() => tasks.filter((task) => task.scheduled?.weekKey === weekKey), [tasks, weekKey]);
+
+  const completedCount = weekTasks.filter((task) => task.completed).length;
+  const completionPct = weekTasks.length === 0 ? 0 : Math.round((completedCount / weekTasks.length) * 100);
+
+  const modalTask = taskInModal ? taskById.get(taskInModal) : undefined;
+
+  async function refreshPlannerData(nextUserId: string) {
+    setLoadingPlanner(true);
+    try {
+      const data = await loadPlannerData(nextUserId);
+      setTasks(data.tasks);
+      setBacklogOrder(data.backlogOrder);
+      setKanbanOrder(data.kanbanOrder);
+      setSelectedWeekStart(data.selectedWeekStart);
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to load planner data.');
+    } finally {
+      setLoadingPlanner(false);
+    }
+  }
+
+  useEffect(() => {
+    draggingTaskIdRef.current = draggingTaskId;
+  }, [draggingTaskId]);
+
+  useEffect(() => {
+    if (!saving) {
+      setSavingDotCount(0);
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setSavingDotCount((prev) => (prev + 1) % 3);
+    }, 300);
+    return () => window.clearInterval(timer);
+  }, [saving]);
+
+  useEffect(() => {
+    if (!hasSupabaseEnv) {
+      setInitializing(false);
+      return;
+    }
+
+    const bootstrap = async () => {
+      try {
+        const user = await getSessionUser();
+        if (user) {
+          setUserId(user.id);
+          setUserEmail(user.email ?? '');
+          await refreshPlannerData(user.id);
+        }
+      } catch (error) {
+        setErrorMessage(error instanceof Error ? error.message : 'Failed to initialize auth.');
+      } finally {
+        setInitializing(false);
+      }
     };
-    updateStore({ ...store, tasks: [task, ...store.tasks] });
-    setNewTaskTitle('');
-  }
 
-  function scheduleTask(taskId: string, dayIndex: number, slot: number) {
-    updateTask(taskId, { scheduled: { weekKey, dayIndex, slot } });
-  }
+    void bootstrap();
 
-  function unscheduleTask(taskId: string) {
-    updateTask(taskId, { scheduled: undefined });
+    const unsubscribe = onAuthStateChange(() => {
+      void (async () => {
+        try {
+          const user = await getSessionUser();
+          if (!user) {
+            setUserId(null);
+            setUserEmail('');
+            setTasks([]);
+            setBacklogOrder([]);
+            setKanbanOrder([]);
+            setSelectedWeekStart(nowWeekStartKey());
+            return;
+          }
+
+          setUserId(user.id);
+          setUserEmail(user.email ?? '');
+          await refreshPlannerData(user.id);
+        } catch (error) {
+          setErrorMessage(error instanceof Error ? error.message : 'Failed to refresh session.');
+        }
+      })();
+    });
+
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      clearDragState();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  function replaceTask(nextTask: Task) {
+    setTasks((current) => current.map((task) => (task.id === nextTask.id ? nextTask : task)));
   }
 
   function clearDragState() {
-    if (dragPreviewRef.current) {
-      if (document.body.contains(dragPreviewRef.current)) {
-        document.body.removeChild(dragPreviewRef.current);
-      }
-      dragPreviewRef.current = null;
-    }
-    unlockPageScroll();
     setDraggingTaskId(null);
-    setHoverSlot(null);
+    setDragCursor(null);
+    setDragBox(null);
+    setDropTarget(null);
+    setShiftPreviewPatches([]);
     setDragOverBacklog(false);
-    setDragOverKanbanStatus(null);
+    setBacklogInsertIndex(null);
+    setDragOverStatus(null);
+    setKanbanDropTarget(null);
   }
 
-  function lockPageScroll() {
-    if (scrollLockRef.current) return;
-    const body = document.body;
-    const html = document.documentElement;
-    scrollLockRef.current = {
-      scrollX: window.scrollX,
-      scrollY: window.scrollY,
-      position: body.style.position,
-      top: body.style.top,
-      left: body.style.left,
-      right: body.style.right,
-      width: body.style.width,
-      overflow: body.style.overflow,
+  function startTaskResize(task: Task, event: ReactMouseEvent<HTMLDivElement>) {
+    if (!task.scheduled) return;
+    event.preventDefault();
+    if (event.button !== 0) return;
+
+    const startY = event.clientY;
+    const startDuration = task.duration;
+    setResizingTaskId(task.id);
+    setResizePreviewDuration(startDuration);
+
+    const onMove = (moveEvent: MouseEvent) => {
+      const deltaSlots = Math.round((moveEvent.clientY - startY) / SLOT_HEIGHT);
+      const targetMinutes = startDuration + deltaSlots * 30;
+      const snapped = Math.round(targetMinutes / 30) * 30;
+      const nextDuration = Math.max(30, Math.min(240, snapped)) as Duration;
+      setResizePreviewDuration(nextDuration);
     };
 
-    body.style.position = 'fixed';
-    body.style.top = `-${window.scrollY}px`;
-    body.style.left = `-${window.scrollX}px`;
-    body.style.right = '0';
-    body.style.width = '100%';
-    body.style.overflow = 'hidden';
-    html.style.scrollBehavior = 'auto';
+    const onUp = (upEvent: MouseEvent) => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      const deltaSlots = Math.round((upEvent.clientY - startY) / SLOT_HEIGHT);
+      const targetMinutes = startDuration + deltaSlots * 30;
+      const snapped = Math.round(targetMinutes / 30) * 30;
+      const nextDuration = Math.max(30, Math.min(240, snapped)) as Duration;
+      setResizingTaskId(null);
+      setResizePreviewDuration(null);
+      if (nextDuration !== startDuration) {
+        void patchTask(task.id, { duration: nextDuration });
+      }
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
   }
 
-  function unlockPageScroll() {
-    if (!scrollLockRef.current) return;
-    const body = document.body;
-    const saved = scrollLockRef.current;
-    body.style.position = saved.position;
-    body.style.top = saved.top;
-    body.style.left = saved.left;
-    body.style.right = saved.right;
-    body.style.width = saved.width;
-    body.style.overflow = saved.overflow;
-    window.scrollTo(saved.scrollX, saved.scrollY);
-    scrollLockRef.current = null;
-  }
+  function getBacklogInsertIndex(y: number) {
+    const nodes = Array.from(document.querySelectorAll('[data-backlog-index]')) as HTMLElement[];
+    if (nodes.length === 0) return 0;
 
-  function onTaskDragStart(taskId: string, event: DragEvent<HTMLDivElement>) {
-    event.dataTransfer.effectAllowed = 'move';
-    lockPageScroll();
-
-    const taskCard = event.currentTarget.closest('.task-card') as HTMLElement | null;
-    if (taskCard) {
-      const cardRect = taskCard.getBoundingClientRect();
-      const pointerOffsetX = event.clientX - cardRect.left;
-      const pointerOffsetY = event.clientY - cardRect.top;
-      const ghost = taskCard.cloneNode(true) as HTMLElement;
-      ghost.style.position = 'fixed';
-      ghost.style.top = '-10000px';
-      ghost.style.left = '-10000px';
-      ghost.style.width = `${taskCard.offsetWidth}px`;
-      ghost.classList.add('drag-preview-card');
-      document.body.appendChild(ghost);
-      dragPreviewRef.current = ghost;
-      event.dataTransfer.setDragImage(ghost, pointerOffsetX, pointerOffsetY);
+    for (const node of nodes) {
+      const idx = Number(node.dataset.backlogIndex);
+      if (!Number.isFinite(idx)) continue;
+      const rect = node.getBoundingClientRect();
+      if (y < rect.top + rect.height / 2) return idx;
     }
 
+    return nodes.length;
+  }
+
+  function getKanbanInsertIndex(statusColumn: HTMLElement, y: number) {
+    const status = statusColumn.dataset.dropStatus as TaskStatus | undefined;
+    if (!status) return 0;
+
+    const nodes = Array.from(
+      statusColumn.querySelectorAll(`[data-kanban-status="${status}"][data-kanban-index]`),
+    ) as HTMLElement[];
+    if (nodes.length === 0) return 0;
+
+    for (const node of nodes) {
+      const idx = Number(node.dataset.kanbanIndex);
+      if (!Number.isFinite(idx)) continue;
+      const rect = node.getBoundingClientRect();
+      if (y < rect.top + rect.height / 2) return idx;
+    }
+
+    return nodes.length;
+  }
+
+  function detectDropTarget(x: number, y: number) {
+    const element = document.elementFromPoint(x, y) as HTMLElement | null;
+    if (!element) return { type: 'none' as const };
+
+    const dayTrackEl = element.closest('[data-day-track]') as HTMLElement | null;
+    const dayTrackIndex = Number(dayTrackEl?.dataset.dayTrack);
+    if (dayTrackEl && Number.isFinite(dayTrackIndex)) {
+      const rect = dayTrackEl.getBoundingClientRect();
+      const rawSlot = Math.floor((y - rect.top) / SLOT_HEIGHT);
+      const clampedSlot = Math.max(0, Math.min(TOTAL_SLOTS - 1, rawSlot));
+      return { type: 'slot' as const, dayIndex: dayTrackIndex, slot: clampedSlot };
+    }
+
+    const slotEl = element.closest('[data-drop-slot]') as HTMLElement | null;
+    if (slotEl?.dataset.dropSlot) {
+      const [dayIndex, slot] = slotEl.dataset.dropSlot.split(':').map(Number);
+      if (Number.isFinite(dayIndex) && Number.isFinite(slot)) {
+        return { type: 'slot' as const, dayIndex, slot };
+      }
+    }
+
+    const backlogEl = element.closest('[data-drop-backlog]');
+    if (backlogEl) return { type: 'backlog' as const, insertIndex: getBacklogInsertIndex(y) };
+
+    const statusEl = element.closest('[data-drop-status]') as HTMLElement | null;
+    const status = statusEl?.dataset.dropStatus as TaskStatus | undefined;
+    if (status && statusEl) {
+      return { type: 'status' as const, status, insertIndex: getKanbanInsertIndex(statusEl, y) };
+    }
+
+    return { type: 'none' as const };
+  }
+
+  function updateHoverTargets(x: number, y: number) {
+    const target = detectDropTarget(x, y);
+    if (target.type === 'slot' && draggingTaskIdRef.current) {
+      const shiftPlan = buildStableShiftPlan(draggingTaskIdRef.current, target.dayIndex, target.slot);
+      if (shiftPlan) {
+        setDropTarget({ dayIndex: target.dayIndex, slot: shiftPlan.movedTaskSlot });
+        setShiftPreviewPatches(
+          shiftPlan.patches.map((patch) => ({
+            taskId: patch.taskId,
+            dayIndex: shiftPlan.dayIndex,
+            slot: patch.slot,
+          })),
+        );
+      } else {
+        const nextSlot = findNearestAvailableSlot(draggingTaskIdRef.current, target.dayIndex, target.slot);
+        setDropTarget(nextSlot !== null ? { dayIndex: target.dayIndex, slot: nextSlot } : null);
+        setShiftPreviewPatches([]);
+      }
+    } else {
+      setDropTarget(null);
+      setShiftPreviewPatches([]);
+    }
+    setDragOverBacklog(target.type === 'backlog');
+    setBacklogInsertIndex(target.type === 'backlog' ? target.insertIndex : null);
+    setDragOverStatus(target.type === 'status' ? target.status : null);
+    setKanbanDropTarget(target.type === 'status' ? { status: target.status, insertIndex: target.insertIndex } : null);
+  }
+
+  function findNearestAvailableSlot(taskId: string, dayIndex: number, desiredSlot: number): number | null {
+    const movingTask = taskById.get(taskId);
+    if (!movingTask) return null;
+
+    const neededSlots = durationToSlots(movingTask.duration);
+    const maxStart = TOTAL_SLOTS - neededSlots;
+    if (maxStart < 0) return null;
+
+    const clampedDesired = Math.max(0, Math.min(desiredSlot, maxStart));
+
+    const occupied = Array.from({ length: TOTAL_SLOTS }, () => false);
+    tasks
+      .filter((task) => task.id !== taskId && task.scheduled?.weekKey === weekKey && task.scheduled.dayIndex === dayIndex)
+      .forEach((task) => {
+        const start = task.scheduled?.slot ?? 0;
+        const end = Math.min(TOTAL_SLOTS, start + durationToSlots(task.duration));
+        for (let i = start; i < end; i += 1) occupied[i] = true;
+      });
+
+    const canPlaceAt = (start: number) => {
+      const end = start + neededSlots;
+      if (end > TOTAL_SLOTS) return false;
+      for (let i = start; i < end; i += 1) {
+        if (occupied[i]) return false;
+      }
+      return true;
+    };
+
+    if (canPlaceAt(clampedDesired)) return clampedDesired;
+
+    for (let delta = 1; delta <= TOTAL_SLOTS; delta += 1) {
+      const forward = clampedDesired + delta;
+      if (forward <= maxStart && canPlaceAt(forward)) return forward;
+
+      const backward = clampedDesired - delta;
+      if (backward >= 0 && canPlaceAt(backward)) return backward;
+    }
+
+    return null;
+  }
+
+  function buildStableShiftPlan(
+    taskId: string,
+    dayIndex: number,
+    desiredSlot: number,
+    movingDurationOverride?: Task['duration'],
+    targetWeekKeyOverride?: string,
+  ) {
+    const movingTask = taskById.get(taskId);
+    if (!movingTask) return null;
+
+    const targetWeekKey = targetWeekKeyOverride ?? weekKey;
+    const movingSlots = durationToSlots(movingDurationOverride ?? movingTask.duration);
+    const movingMaxStart = TOTAL_SLOTS - movingSlots;
+    if (movingMaxStart < 0) return null;
+
+    const sameDayTasks = tasks
+      .filter(
+        (task) =>
+          task.id !== taskId &&
+          task.scheduled?.weekKey === targetWeekKey &&
+          task.scheduled.dayIndex === dayIndex,
+      )
+      .sort((a, b) => (a.scheduled?.slot ?? 0) - (b.scheduled?.slot ?? 0));
+
+    let movingStart = Math.max(0, Math.min(desiredSlot, movingMaxStart));
+
+    for (const task of sameDayTasks) {
+      const start = task.scheduled?.slot ?? 0;
+      const end = start + durationToSlots(task.duration);
+      if (start < movingStart && end > movingStart) {
+        movingStart = end;
+      }
+    }
+
+    if (movingStart > movingMaxStart) return null;
+
+    const patches: Array<{ taskId: string; slot: number }> = [{ taskId, slot: movingStart }];
+    let cursor = movingStart + movingSlots;
+
+    for (const task of sameDayTasks) {
+      const start = task.scheduled?.slot ?? 0;
+      if (start < movingStart) continue;
+
+      const taskSlots = durationToSlots(task.duration);
+      const maxStart = TOTAL_SLOTS - taskSlots;
+      const nextStart = Math.max(start, cursor);
+      if (nextStart > maxStart) return null;
+
+      if (nextStart !== start) patches.push({ taskId: task.id, slot: nextStart });
+      cursor = nextStart + taskSlots;
+    }
+
+    return { weekKey: targetWeekKey, dayIndex, movedTaskSlot: movingStart, patches };
+  }
+
+  async function applyShiftPlan(
+    dayIndex: number,
+    patches: Array<{ taskId: string; slot: number }>,
+  ) {
+    if (!userId) return;
+    setSaving(true);
+    try {
+      const updatedTasks = await Promise.all(
+        patches.map((patch) =>
+          updateTask(userId, patch.taskId, {
+            scheduled: makeScheduled(weekKey, dayIndex, patch.slot),
+          }),
+        ),
+      );
+      const updatedById = new Map(updatedTasks.map((task) => [task.id, task]));
+      setTasks((current) => current.map((task) => updatedById.get(task.id) ?? task));
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to reorder timeline tasks.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function persistBacklogOrder(nextOrder: string[]) {
+    if (!userId) return;
+    setBacklogOrder(nextOrder);
+    try {
+      await updateBacklogOrder(userId, nextOrder, selectedWeekStart);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to save backlog order.');
+    }
+  }
+
+  async function persistKanbanOrder(nextOrder: string[]) {
+    if (!userId) return;
+    setKanbanOrder(nextOrder);
+    try {
+      await updateKanbanOrder(userId, nextOrder, selectedWeekStart);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to save kanban order.');
+    }
+  }
+
+  async function reorderBacklogTaskToIndex(dragTaskId: string, insertIndex: number) {
+    const backlogIds = backlogTasks.map((task) => task.id).filter((id) => id !== dragTaskId);
+    const safeIndex = Math.max(0, Math.min(insertIndex, backlogIds.length));
+    backlogIds.splice(safeIndex, 0, dragTaskId);
+    await persistBacklogOrder(backlogIds);
+  }
+
+  async function reorderKanbanTaskToIndex(dragTaskId: string, status: TaskStatus, insertIndex: number) {
+    const tasksInTargetStatus = sortTasksByOrder(
+      tasks.filter((task) => task.id !== dragTaskId && task.status === status),
+      kanbanOrder,
+    );
+    const targetIds = tasksInTargetStatus.map((task) => task.id);
+    const safeIndex = Math.max(0, Math.min(insertIndex, targetIds.length));
+    targetIds.splice(safeIndex, 0, dragTaskId);
+
+    const nextKanbanOrder: string[] = [];
+    STATUS_ORDER.forEach((statusName) => {
+      if (statusName === status) {
+        nextKanbanOrder.push(...targetIds);
+        return;
+      }
+      const ids = sortTasksByOrder(
+        tasks.filter((task) => task.id !== dragTaskId && task.status === statusName),
+        kanbanOrder,
+      ).map((task) => task.id);
+      nextKanbanOrder.push(...ids);
+    });
+
+    await persistKanbanOrder(nextKanbanOrder);
+  }
+
+  function onTaskHandleMouseDown(taskId: string, event: ReactMouseEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+
+    const card = (event.currentTarget as HTMLElement).closest('.task-card') as HTMLElement | null;
+    if (!card) return;
+
+    const rect = card.getBoundingClientRect();
     setDraggingTaskId(taskId);
+    setDragCursor({ x: event.clientX, y: event.clientY });
+    setDragBox({
+      width: rect.width,
+      height: rect.height,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+    });
+    updateHoverTargets(event.clientX, event.clientY);
+
+    const onMove = (moveEvent: MouseEvent) => {
+      setDragCursor({ x: moveEvent.clientX, y: moveEvent.clientY });
+      updateHoverTargets(moveEvent.clientX, moveEvent.clientY);
+    };
+
+    const onUp = (upEvent: MouseEvent) => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+
+      const dragTaskId = draggingTaskIdRef.current;
+      if (!dragTaskId) {
+        clearDragState();
+        return;
+      }
+
+      const target = detectDropTarget(upEvent.clientX, upEvent.clientY);
+      void (async () => {
+        if (target.type === 'slot') {
+          const shiftPlan = buildStableShiftPlan(dragTaskId, target.dayIndex, target.slot);
+          if (shiftPlan) {
+            await applyShiftPlan(shiftPlan.dayIndex, shiftPlan.patches);
+          } else {
+            const nextSlot = findNearestAvailableSlot(dragTaskId, target.dayIndex, target.slot);
+            if (nextSlot === null) {
+              setErrorMessage('No room in that day for this task duration.');
+            } else {
+              await moveTaskToTimeline(dragTaskId, target.dayIndex, nextSlot);
+              setErrorMessage(null);
+            }
+          }
+        } else if (target.type === 'backlog') {
+          const sourceTask = taskById.get(dragTaskId);
+          if (sourceTask?.scheduled) {
+            await moveTaskToBacklog(dragTaskId);
+          }
+          await reorderBacklogTaskToIndex(dragTaskId, target.insertIndex);
+        } else if (target.type === 'status') {
+          await patchTask(dragTaskId, { status: target.status, completed: target.status === 'Done' });
+          await reorderKanbanTaskToIndex(dragTaskId, target.status, target.insertIndex);
+        }
+      })();
+
+      clearDragState();
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
   }
 
-  function onTaskDrop(dayIndex: number, slot: number) {
-    if (!draggingTaskId) return;
-    scheduleTask(draggingTaskId, dayIndex, slot);
-    clearDragState();
+  async function handleCreateTask() {
+    const title = newTaskTitle.trim();
+    if (!title || !userId) return;
+
+    setSaving(true);
+    try {
+      const task = await createTask(userId, title);
+      setTasks((current) => [task, ...current]);
+      const nextOrder = [task.id, ...backlogOrder.filter((id) => id !== task.id)];
+      await persistBacklogOrder(nextOrder);
+      const nextKanbanOrder = [task.id, ...kanbanOrder.filter((id) => id !== task.id)];
+      await persistKanbanOrder(nextKanbanOrder);
+      setNewTaskTitle('');
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to create task.');
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function dropToBacklog() {
-    if (!draggingTaskId) return;
-    unscheduleTask(draggingTaskId);
-    clearDragState();
+  async function patchTask(taskId: string, patch: Partial<Task>) {
+    if (!userId) return;
+
+    const currentTask = taskById.get(taskId);
+    const hasDurationChange = patch.duration !== undefined && currentTask && patch.duration !== currentTask.duration;
+    const hasScheduledPatch = Object.prototype.hasOwnProperty.call(patch, 'scheduled');
+
+    if (currentTask?.scheduled && hasDurationChange && !hasScheduledPatch) {
+      const plan = buildStableShiftPlan(
+        taskId,
+        currentTask.scheduled.dayIndex,
+        currentTask.scheduled.slot,
+        patch.duration,
+        currentTask.scheduled.weekKey,
+      );
+
+      if (!plan) {
+        setErrorMessage('Not enough room in that day for the new duration.');
+        return;
+      }
+
+      setSaving(true);
+      try {
+        const shiftedPatches = plan.patches.filter((entry) => entry.taskId !== taskId);
+        const updates = await Promise.all([
+          updateTask(userId, taskId, {
+            ...patch,
+            scheduled: makeScheduled(plan.weekKey, plan.dayIndex, plan.movedTaskSlot),
+          }),
+          ...shiftedPatches.map((entry) =>
+            updateTask(userId, entry.taskId, {
+              scheduled: makeScheduled(plan.weekKey, plan.dayIndex, entry.slot),
+            }),
+          ),
+        ]);
+
+        const updatedById = new Map(updates.map((task) => [task.id, task]));
+        setTasks((current) => current.map((task) => updatedById.get(task.id) ?? task));
+        setErrorMessage(null);
+      } catch (error) {
+        setErrorMessage(error instanceof Error ? error.message : 'Failed to update task duration.');
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const nextTask = await updateTask(userId, taskId, patch);
+      replaceTask(nextTask);
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to update task.');
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function weekShift(delta: number) {
-    const d = fromLocalDateKey(store.selectedWeekStart);
-    d.setDate(d.getDate() + delta * 7);
-    updateStore({ ...store, selectedWeekStart: toLocalDateKey(d) });
+  async function handleDeleteTask(taskId: string) {
+    if (!userId) return;
+
+    setSaving(true);
+    try {
+      await deleteTask(userId, taskId);
+      setTasks((current) => current.filter((task) => task.id !== taskId));
+      const nextOrder = backlogOrder.filter((id) => id !== taskId);
+      await persistBacklogOrder(nextOrder);
+      const nextKanbanOrder = kanbanOrder.filter((id) => id !== taskId);
+      await persistKanbanOrder(nextKanbanOrder);
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to delete task.');
+    } finally {
+      setSaving(false);
+    }
   }
 
-  const taskById = useMemo(
-    () => new Map(store.tasks.map((t) => [t.id, t])),
-    [store.tasks],
-  );
+  async function moveTaskToTimeline(taskId: string, dayIndex: number, slot: number) {
+    await patchTask(taskId, {
+      scheduled: makeScheduled(weekKey, dayIndex, slot),
+    });
+  }
 
-  const draggingTask = draggingTaskId ? taskById.get(draggingTaskId) : undefined;
-  const modalTask = modalTaskId ? taskById.get(modalTaskId) : undefined;
+  async function moveTaskToBacklog(taskId: string) {
+    await patchTask(taskId, { scheduled: undefined });
+  }
 
-  if (!store.authName) {
+  async function changeSelectedWeek(nextWeekKey: string) {
+    if (!userId) return;
+
+    setSelectedWeekStart(nextWeekKey);
+    try {
+      await updateSelectedWeekStart(userId, nextWeekKey, backlogOrder);
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to save selected week.');
+    }
+  }
+
+  async function handleAuthSubmit() {
+    if (!email.trim() || !password) return;
+
+    setInitializing(true);
+    try {
+      if (authMode === 'sign-up') {
+        await signUp(email.trim(), password);
+      } else {
+        await signIn(email.trim(), password);
+      }
+      setErrorMessage(null);
+      setPassword('');
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Authentication failed.');
+    } finally {
+      setInitializing(false);
+    }
+  }
+
+  if (!hasSupabaseEnv) {
     return (
-      <div className="login-screen grain-bg">
-        <div className="login-card">
+      <div className="login-shell grain-bg">
+        <main className="login-card">
+          <h1>Supabase Required</h1>
+          <p>Add environment variables to enable account-based auth and cloud persistence.</p>
+          <code>VITE_SUPABASE_URL</code>
+          <code>VITE_SUPABASE_ANON_KEY</code>
+        </main>
+      </div>
+    );
+  }
+
+  if (initializing || loadingPlanner) {
+    return (
+      <div className="login-shell grain-bg">
+        <main className="login-card">
+          <h1>Loading Planner</h1>
+          <p>Connecting to your workspace...</p>
+        </main>
+      </div>
+    );
+  }
+
+  if (!userId) {
+    return (
+      <div className="login-shell grain-bg">
+        <main className="login-card">
           <h1>Calm Weekly Planner</h1>
-          <p>Local sign-in keeps your planning space private on this device.</p>
-          <input
-            placeholder="Your name"
-            value={authNameDraft}
-            onChange={(e) => setAuthNameDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && authNameDraft.trim()) {
-                updateStore({ ...store, authName: authNameDraft.trim() });
-                setAuthNameDraft('');
-              }
-            }}
-          />
-          <button
-            onClick={() => {
-              if (!authNameDraft.trim()) return;
-              updateStore({ ...store, authName: authNameDraft.trim() });
-              setAuthNameDraft('');
-            }}
-          >
-            Continue
-          </button>
-        </div>
+          <p>Sign in to keep tasks synced to your account.</p>
+
+          {errorMessage && <div className="error-banner">{errorMessage}</div>}
+
+          <label>
+            Email
+            <input
+              type="email"
+              placeholder="you@example.com"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              onKeyDown={(event) => event.key === 'Enter' && void handleAuthSubmit()}
+            />
+          </label>
+
+          <label>
+            Password
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              onKeyDown={(event) => event.key === 'Enter' && void handleAuthSubmit()}
+            />
+          </label>
+
+          <div className="auth-actions">
+            <button onClick={() => void handleAuthSubmit()}>
+              {authMode === 'sign-up' ? 'Create Account' : 'Sign In'}
+            </button>
+            <button
+              onClick={() => {
+                setAuthMode((current) => (current === 'sign-in' ? 'sign-up' : 'sign-in'));
+                setErrorMessage(null);
+              }}
+            >
+              {authMode === 'sign-up' ? 'Use Existing Account' : 'Create New Account'}
+            </button>
+          </div>
+        </main>
       </div>
     );
   }
 
   return (
-    <div className="app grain-bg" onDragEnd={clearDragState}>
-      <header className="top-bar">
-        <div>
-          <h1>Weekly Planning Dashboard</h1>
-          <p>{formatWeekLabel(store.selectedWeekStart)}</p>
-        </div>
-        <div className="controls">
-          <button onClick={() => weekShift(-1)}>Previous Week</button>
-          <button onClick={() => updateStore({ ...store, selectedWeekStart: nowWeekStartKey() })}>This Week</button>
-          <button onClick={() => weekShift(1)}>Next Week</button>
-          <button className={viewMode === 'plan' ? 'active' : ''} onClick={() => setViewMode('plan')}>
-            Weekly Plan
-          </button>
-          <button className={viewMode === 'kanban' ? 'active' : ''} onClick={() => setViewMode('kanban')}>
-            Kanban
-          </button>
-        </div>
-      </header>
-      {draggingTask && (
-        <section className="drag-banner">
-          <strong>Moving:</strong> {draggingTask.title}
-          <span>Drop on calendar, backlog, or a status column.</span>
+    <div className={`planner-shell grain-bg view-${viewMode}`}>
+      <section className="header-hero">
+        <header className="top-bar">
+          <h1 className="header-title">My Weekly Plan</h1>
+          <img className="header-logo" src="/img/tempo.png" alt="My Weekly Plan" />
+          <div className="account-row">
+            <span className="account-email">{userEmail || 'Signed in'}</span>
+            <button className="account-link" type="button">Settings</button>
+            <button className="account-link" type="button" onClick={() => void signOut()}>Log Out</button>
+          </div>
+        </header>
+        {errorMessage && <section className="error-banner">{errorMessage}</section>}
+        <section className="status-slot" aria-live="polite">
+          {saving ? (
+            <span className="status-text status-saving">
+              Saving<span className="status-dots">{'.'.repeat(savingDotCount + 1)}</span>
+            </span>
+          ) : (
+            <span className="status-text status-saved">
+              <Check size={13} aria-hidden="true" />
+              <span>Saved</span>
+            </span>
+          )}
         </section>
-      )}
-
-      <section className="progress-card">
-        <strong>{completedCount} / {scheduledThisWeek.length} ({progress}%)</strong>
-        <span>completed this week</span>
       </section>
 
-      <div className="layout">
+      <section className="sticky-planning-bar">
+        <div className="top-controls">
+          <div className="week-nav-row">
+            <button className="icon-text-button" aria-label="Previous week" onClick={() => void changeSelectedWeek(addWeeks(weekKey, -1))}>
+              <ChevronLeft size={15} />
+            </button>
+            <h2>{formatWeekLabel(weekKey)}</h2>
+            <button className="icon-text-button" aria-label="Next week" onClick={() => void changeSelectedWeek(addWeeks(weekKey, 1))}>
+              <ChevronRight size={15} />
+            </button>
+            <button className="icon-text-button" onClick={() => void changeSelectedWeek(nowWeekStartKey())}>
+              <CalendarDays size={15} />
+              <span>This Week</span>
+            </button>
+          </div>
+          <div className="view-toggle" role="tablist" aria-label="View mode">
+            <button
+              className={`icon-text-button view-toggle-button ${viewMode === 'plan' ? 'active' : ''}`}
+              role="tab"
+              aria-selected={viewMode === 'plan'}
+              aria-label="Weekly Plan"
+              onClick={() => setViewMode('plan')}
+            >
+              <Calendar size={15} />
+            </button>
+            <button
+              className={`icon-text-button view-toggle-button ${viewMode === 'kanban' ? 'active' : ''}`}
+              role="tab"
+              aria-selected={viewMode === 'kanban'}
+              aria-label="Kanban"
+              onClick={() => setViewMode('kanban')}
+            >
+              <Columns3 size={15} />
+            </button>
+          </div>
+        </div>
+
+        <section className="progress-strip" aria-live="polite">
+          <div className="progress-fill" style={{ width: `${completionPct}%` }} />
+          <p>
+            <strong>{completedCount} / {weekTasks.length} ({completionPct}%)</strong> done this week
+          </p>
+        </section>
+      </section>
+
+      {draggingTaskId && dragCursor && dragBox && (
+        <div
+          className="drag-floating-card"
+          style={{
+            width: dragBox.width,
+            left: dragCursor.x,
+            top: dragCursor.y,
+          }}
+        >
+          {taskById.get(draggingTaskId)?.title}
+        </div>
+      )}
+
+      <div className={`layout ${viewMode === 'kanban' ? 'kanban-only' : ''}`}>
         <aside
-          className={`backlog ${dragOverBacklog ? 'drop-active' : ''}`}
-          onDragOver={(e) => {
-            e.preventDefault();
-            if (draggingTaskId) setDragOverBacklog(true);
-          }}
-          onDragEnter={() => {
-            if (draggingTaskId) setDragOverBacklog(true);
-          }}
-          onDragLeave={() => setDragOverBacklog(false)}
-          onDrop={dropToBacklog}
+          data-drop-backlog="1"
+          className={`backlog-panel ${viewMode === 'plan' ? 'plan-sticky' : ''} ${dragOverBacklog ? 'drop-active' : ''}`}
         >
           <h2>Backlog</h2>
+
           <div className="new-task-row">
             <input
+              placeholder="Press enter to add task"
               value={newTaskTitle}
-              onChange={(e) => setNewTaskTitle(e.target.value)}
-              placeholder="Add a task and press Enter"
-              onKeyDown={(e) => e.key === 'Enter' && handleCreateTask()}
-            />
-            <button disabled={!newTaskTitle.trim()} onClick={handleCreateTask}>Add</button>
-          </div>
-          <p className="helper-text">Click task title to rename. Click the card for full details.</p>
-          <div className="task-list">
-            {backlogTasks.map((task) => (
-              <TaskCard
-                key={task.id}
-                task={task}
-                isEditing={editingTaskId === task.id}
-                onEditToggle={(on) => setEditingTaskId(on ? task.id : null)}
-                onTitleChange={(title) => updateTask(task.id, { title })}
-                onToggleComplete={() =>
-                  updateTask(task.id, {
-                    completed: !task.completed,
-                    status: !task.completed ? 'Done' : 'Not Started',
-                  })
+              onChange={(event) => setNewTaskTitle(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  void handleCreateTask();
                 }
-                onOpenDetails={() => setModalTaskId(task.id)}
-                onDragStart={(e) => onTaskDragStart(task.id, e)}
-              />
-            ))}
+              }}
+            />
+            <button
+              className="icon-text-button"
+              aria-label="Add task"
+              disabled={!newTaskTitle.trim() || saving}
+              onClick={() => void handleCreateTask()}
+            >
+              <Plus size={15} />
+            </button>
+          </div>
+
+          <div className="backlog-scroll">
+            <div className="task-stack">
+              {backlogTasks.map((task, index) => (
+                <div key={task.id} data-backlog-index={index}>
+                  {draggingTaskId && dragOverBacklog && backlogInsertIndex === index && (
+                    <div className="backlog-drop-line" />
+                  )}
+                  <TaskCard
+                    task={task}
+                    isTitleEditing={editingTitleTaskId === task.id}
+                    onTitleEditToggle={(editing) => setEditingTitleTaskId(editing ? task.id : null)}
+                    onTitleSave={(title) => void patchTask(task.id, { title })}
+                    onOpenDetails={() => setTaskInModal(task.id)}
+                    onToggleComplete={() =>
+                      void patchTask(task.id, {
+                        completed: !task.completed,
+                        status: !task.completed ? 'Done' : task.status === 'Done' ? 'Not Started' : task.status,
+                      })
+                    }
+                    onHandleMouseDown={(event) => onTaskHandleMouseDown(task.id, event)}
+                    isDragging={draggingTaskId === task.id}
+                  />
+                </div>
+              ))}
+              {draggingTaskId && dragOverBacklog && backlogInsertIndex === backlogTasks.length && (
+                <div className="backlog-drop-line" />
+              )}
+            </div>
           </div>
         </aside>
 
         {viewMode === 'kanban' ? (
-          <section className="kanban">
-            {STATUS_ORDER.map((status) => (
-              <div
-                key={status}
-                className={`kanban-col ${dragOverKanbanStatus === status ? 'drop-active' : ''}`}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  if (draggingTaskId) setDragOverKanbanStatus(status);
-                }}
-                onDragEnter={() => {
-                  if (draggingTaskId) setDragOverKanbanStatus(status);
-                }}
-                onDragLeave={() => setDragOverKanbanStatus(null)}
-                onDrop={() => {
-                  if (!draggingTaskId) return;
-                  const t = taskById.get(draggingTaskId);
-                  if (!t) return;
-                  updateTask(draggingTaskId, { status, completed: status === 'Done' });
-                  clearDragState();
-                }}
-              >
-                <h3>{status}</h3>
-                {store.tasks
-                  .filter((task) => task.status === status)
-                  .map((task) => (
-                    <TaskCard
-                      key={task.id}
-                      task={task}
-                      isEditing={editingTaskId === task.id}
-                      onEditToggle={(on) => setEditingTaskId(on ? task.id : null)}
-                      onTitleChange={(title) => updateTask(task.id, { title })}
-                      onToggleComplete={() =>
-                        updateTask(task.id, {
-                          completed: !task.completed,
-                          status: !task.completed ? 'Done' : 'Not Started',
-                        })
-                      }
-                      onOpenDetails={() => setModalTaskId(task.id)}
-                      onDragStart={(e) => onTaskDragStart(task.id, e)}
-                    />
-                  ))}
-              </div>
-            ))}
+          <section className="kanban-board">
+            {STATUS_ORDER.map((status) => {
+              const tasksInStatus = sortTasksByOrder(
+                tasks.filter((task) => task.status === status),
+                kanbanOrder,
+              );
+
+              return (
+                <div key={status} data-drop-status={status} className={`kanban-column ${dragOverStatus === status ? 'drop-active' : ''}`}>
+                  <h3>{status}</h3>
+                  <div className="task-stack">
+                    {tasksInStatus.map((task, index) => (
+                      <div key={task.id} data-kanban-status={status} data-kanban-index={index}>
+                        {draggingTaskId &&
+                          dragOverStatus === status &&
+                          kanbanDropTarget?.status === status &&
+                          kanbanDropTarget.insertIndex === index && <div className="backlog-drop-line" />}
+                        <TaskCard
+                          task={task}
+                          compact
+                          isTitleEditing={editingTitleTaskId === task.id}
+                          onTitleEditToggle={(editing) => setEditingTitleTaskId(editing ? task.id : null)}
+                          onTitleSave={(title) => void patchTask(task.id, { title })}
+                          onOpenDetails={() => setTaskInModal(task.id)}
+                          onToggleComplete={() =>
+                            void patchTask(task.id, {
+                              completed: !task.completed,
+                              status: !task.completed ? 'Done' : task.status === 'Done' ? 'Not Started' : task.status,
+                            })
+                          }
+                          onHandleMouseDown={(event) => onTaskHandleMouseDown(task.id, event)}
+                          isDragging={draggingTaskId === task.id}
+                        />
+                      </div>
+                    ))}
+                    {draggingTaskId &&
+                      dragOverStatus === status &&
+                      kanbanDropTarget?.status === status &&
+                      kanbanDropTarget.insertIndex === tasksInStatus.length && <div className="backlog-drop-line" />}
+                  </div>
+                </div>
+              );
+            })}
           </section>
         ) : (
           <section
-            className={`timeline-wrap ${draggingTaskId ? 'dragging' : ''}`}
-            onTouchStart={(e) => setTouchStartX(e.touches[0]?.clientX ?? null)}
-            onTouchEnd={(e) => {
-              const endX = e.changedTouches[0]?.clientX ?? null;
-              if (touchStartX === null || endX === null) return;
+            className="timeline-area"
+            onTouchStart={(event) => setTouchStartX(event.touches[0]?.clientX ?? null)}
+            onTouchEnd={(event) => {
+              if (touchStartX === null) return;
+              const endX = event.changedTouches[0]?.clientX ?? null;
+              if (endX === null) return;
               const delta = endX - touchStartX;
               if (Math.abs(delta) > 40) {
-                setMobileDay((p) => (delta < 0 ? (p + 1) % 7 : (p + 6) % 7));
+                setMobileDay((current) => (delta < 0 ? (current + 1) % 7 : (current + 6) % 7));
               }
               setTouchStartX(null);
             }}
           >
-            <div className="mobile-day-switch">
-              <button onClick={() => setMobileDay((p) => (p + 6) % 7)}>Previous Day</button>
+            <div className="mobile-day-nav">
+              <button onClick={() => setMobileDay((current) => (current + 6) % 7)}>Previous Day</button>
               <strong>{DAY_NAMES[mobileDay]}</strong>
-              <button onClick={() => setMobileDay((p) => (p + 1) % 7)}>Next Day</button>
+              <button onClick={() => setMobileDay((current) => (current + 1) % 7)}>Next Day</button>
             </div>
-            <div className="timeline-grid">
-              {DAY_NAMES.map((name, dayIndex) => {
-                const dayTasks = scheduledThisWeek
-                  .filter((t) => t.scheduled?.dayIndex === dayIndex)
-                  .sort((a, b) => (a.scheduled!.slot - b.scheduled!.slot));
 
-                const isToday = weekKey === todayWeek && dayIndex === todayDayIndex;
+            <div className="timeline-grid">
+              {DAY_NAMES.map((dayName, dayIndex) => {
+                const isToday = weekKey === todayWeekKey && dayIndex === todayDayIndex;
+                const dayTasks = weekTasks
+                  .filter((task) => task.scheduled?.dayIndex === dayIndex)
+                  .sort((a, b) => (a.scheduled?.slot ?? 0) - (b.scheduled?.slot ?? 0));
+                const dayShiftPreview = shiftPreviewPatches.filter((patch) => patch.dayIndex === dayIndex);
+                const previewByTaskId = new Map(dayShiftPreview.map((patch) => [patch.taskId, patch.slot]));
+
                 return (
                   <div
-                    className={`day-col ${isToday ? 'today' : ''} ${mobileDay === dayIndex ? 'mobile-visible' : ''}`}
-                    key={name}
+                    key={dayName}
+                    className={`day-column ${isToday ? 'today' : ''} ${mobileDay === dayIndex ? 'mobile-visible' : ''}`}
                   >
                     <div className="day-header">
-                      <h3>{name}</h3>
-                      <span>{formatDayLabel(store.selectedWeekStart, dayIndex)}</span>
+                      <h3>{dayName}</h3>
+                      <span>{formatDayLabel(weekKey, dayIndex)}</span>
                     </div>
-                    <div className="day-body">
+
+                    <div className="day-track" data-day-track={dayIndex}>
                       {Array.from({ length: TOTAL_SLOTS }).map((_, slot) => {
                         const isHour = slot % 2 === 0;
-                        const hover = hoverSlot?.dayIndex === dayIndex && hoverSlot.slot === slot;
+                        const hourBand = Math.floor(slot / 2) % 2 === 0 ? 'band-a' : 'band-b';
+                        const isDropTarget = dropTarget?.dayIndex === dayIndex && dropTarget.slot === slot;
                         return (
                           <div
                             key={slot}
-                            className={`time-slot ${isHour ? 'hour-slot' : 'half-slot'} ${hover ? 'slot-hover' : ''}`}
+                            data-drop-slot={`${dayIndex}:${slot}`}
+                            className={`time-slot ${isHour ? 'hour' : 'half'} ${hourBand} ${isDropTarget ? 'drop-target' : ''}`}
                             style={{ height: SLOT_HEIGHT }}
-                            onDragOver={(e) => {
-                              e.preventDefault();
-                              setHoverSlot({ dayIndex, slot });
-                            }}
-                            onDrop={() => onTaskDrop(dayIndex, slot)}
-                            onDragLeave={() => setHoverSlot(null)}
                           >
-                            <span className="slot-label">{timeLabel(slot)}</span>
+                            <span className="time-label">{timeLabel(slot)}</span>
                           </div>
                         );
                       })}
 
                       {dayTasks.map((task) => {
-                        const top = task.scheduled!.slot * SLOT_HEIGHT;
-                        const slots = durationToSlots(task.duration);
-                        const height = slots * SLOT_HEIGHT - 8;
+                        const top = (task.scheduled?.slot ?? 0) * SLOT_HEIGHT + SCHEDULED_CARD_TOP_OFFSET;
+                        const renderedDuration =
+                          resizingTaskId === task.id && resizePreviewDuration ? resizePreviewDuration : task.duration;
+                        const height =
+                          durationToSlots(renderedDuration) * SLOT_HEIGHT -
+                          (SCHEDULED_CARD_TOP_OFFSET + SCHEDULED_CARD_BOTTOM_GAP);
+                        const hasPreviewShift = draggingTaskId !== null && previewByTaskId.has(task.id);
                         return (
-                          <div key={task.id} className="absolute-task" style={{ top, height }}>
+                          <div
+                            key={task.id}
+                            className={`scheduled-task ${hasPreviewShift ? 'preview-source' : ''}`}
+                            style={{ top, height }}
+                          >
                             <TaskCard
                               task={task}
-                              isEditing={editingTaskId === task.id}
-                              onEditToggle={(on) => setEditingTaskId(on ? task.id : null)}
-                              onTitleChange={(title) => updateTask(task.id, { title })}
+                              compact
+                              isTitleEditing={editingTitleTaskId === task.id}
+                              onTitleEditToggle={(editing) => setEditingTitleTaskId(editing ? task.id : null)}
+                              onTitleSave={(title) => void patchTask(task.id, { title })}
+                              onOpenDetails={() => setTaskInModal(task.id)}
                               onToggleComplete={() =>
-                                updateTask(task.id, {
+                                void patchTask(task.id, {
                                   completed: !task.completed,
-                                  status: !task.completed ? 'Done' : 'Not Started',
+                                  status: !task.completed ? 'Done' : task.status === 'Done' ? 'Not Started' : task.status,
                                 })
                               }
-                              onOpenDetails={() => setModalTaskId(task.id)}
-                              onDragStart={(e) => onTaskDragStart(task.id, e)}
+                              onHandleMouseDown={(event) => onTaskHandleMouseDown(task.id, event)}
+                              onResizeMouseDown={(event) => startTaskResize(task, event)}
+                              resizable
+                              isDragging={draggingTaskId === task.id}
                             />
+                          </div>
+                        );
+                      })}
+
+                      {dayShiftPreview.map((patch) => {
+                        const task = taskById.get(patch.taskId);
+                        if (!task) return null;
+                        const top = patch.slot * SLOT_HEIGHT + SCHEDULED_CARD_TOP_OFFSET;
+                        const height =
+                          durationToSlots(task.duration) * SLOT_HEIGHT - (SCHEDULED_CARD_TOP_OFFSET + SCHEDULED_CARD_BOTTOM_GAP);
+                        return (
+                          <div
+                            key={`preview-${patch.taskId}-${patch.slot}`}
+                            className={`scheduled-preview ${patch.taskId === draggingTaskId ? 'moving' : 'shifted'}`}
+                            style={{ top, height }}
+                          >
+                            {task.title}
                           </div>
                         );
                       })}
@@ -452,12 +1101,12 @@ function App() {
       {modalTask && (
         <TaskModal
           task={modalTask}
-          onClose={() => setModalTaskId(null)}
-          onSave={(patch) => updateTask(modalTask.id, patch)}
+          onClose={() => setTaskInModal(null)}
           onDelete={() => {
-            updateStore({ ...store, tasks: store.tasks.filter((t) => t.id !== modalTask.id) });
-            setModalTaskId(null);
+            void handleDeleteTask(modalTask.id);
+            setTaskInModal(null);
           }}
+          onSave={(patch) => void patchTask(modalTask.id, patch)}
         />
       )}
     </div>

@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/types.ts","./src/components/taskcard.tsx","./src/components/taskmodal.tsx","./src/lib/cloudstore.ts","./src/lib/datetime.ts","./src/lib/storage.ts","./src/lib/supabase.ts"],"version":"5.9.3"}

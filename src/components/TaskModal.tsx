@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { DURATIONS, STATUS_ORDER, type Task, type TaskStatus, uid } from '../types';
+import { useRef, useState } from 'react';
+import { Check, Link2, Paperclip, Trash2, X } from 'lucide-react';
+import { DURATIONS, STATUS_ORDER, uid, type Duration, type Task, type TaskStatus } from '../types';
 
 type TaskModalProps = {
   task: Task;
@@ -10,24 +11,53 @@ type TaskModalProps = {
 
 export function TaskModal({ task, onClose, onSave, onDelete }: TaskModalProps) {
   const [draft, setDraft] = useState<Task>(task);
+  const [pendingLink, setPendingLink] = useState('');
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
 
-  function updateLink(index: number, value: string) {
-    const next = [...draft.links];
-    next[index] = value;
-    setDraft({ ...draft, links: next });
+  function removeLink(index: number) {
+    setDraft({ ...draft, links: draft.links.filter((_, i) => i !== index) });
   }
 
-  function addAttachment(fileList: FileList | null) {
+  function normalizeLink(value: string) {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    if (/^https?:\/\//i.test(trimmed)) return trimmed;
+    return `https://${trimmed}`;
+  }
+
+  function confirmPendingLink() {
+    const link = normalizeLink(pendingLink);
+    if (!link) return;
+    if (draft.links.includes(link)) {
+      setPendingLink('');
+      return;
+    }
+    setDraft({ ...draft, links: [...draft.links, link] });
+    setPendingLink('');
+  }
+
+  function removeAttachment(id: string) {
+    setDraft({ ...draft, attachments: draft.attachments.filter((attachment) => attachment.id !== id) });
+    if (attachmentInputRef.current) attachmentInputRef.current.value = '';
+  }
+
+  function onFilesSelected(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) return;
-    const files = Array.from(fileList);
-    files.forEach((file) => {
+
+    Array.from(fileList).forEach((file) => {
       const reader = new FileReader();
       reader.onload = () => {
-        setDraft((current) => ({
-          ...current,
+        setDraft((prev) => ({
+          ...prev,
           attachments: [
-            ...current.attachments,
-            { id: uid(), name: file.name, dataUrl: String(reader.result ?? '') },
+            ...prev.attachments,
+            {
+              id: uid(),
+              name: file.name,
+              mimeType: file.type,
+              size: file.size,
+              dataUrl: String(reader.result ?? ''),
+            },
           ],
         }));
       };
@@ -37,67 +67,196 @@ export function TaskModal({ task, onClose, onSave, onDelete }: TaskModalProps) {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <section className="modal" onClick={(e) => e.stopPropagation()}>
-        <header>
+      <section className="task-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+        <header className="task-modal-header">
           <h3>Task Details</h3>
-          <button onClick={onClose}>Close</button>
+          <button onClick={onClose} className="icon-text-button">
+            <X size={16} />
+            <span>Close</span>
+          </button>
         </header>
 
-        <label>Title</label>
-        <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
+        <label>
+          Title
+          <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
+        </label>
 
-        <label>Status</label>
-        <select
-          value={draft.status}
-          onChange={(e) => {
-            const status = e.target.value as TaskStatus;
-            setDraft({ ...draft, status, completed: status === 'Done' });
-          }}
-        >
-          {STATUS_ORDER.map((status) => (
-            <option key={status} value={status}>{status}</option>
-          ))}
-        </select>
+        <div className="modal-grid-2">
+          <label>
+            Status
+            <select
+              value={draft.status}
+              onChange={(event) => {
+                const status = event.target.value as TaskStatus;
+                setDraft({ ...draft, status, completed: status === 'Done' });
+              }}
+            >
+              {STATUS_ORDER.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
+          </label>
 
-        <label>Duration</label>
-        <select value={draft.duration} onChange={(e) => setDraft({ ...draft, duration: Number(e.target.value) as Task['duration'] })}>
-          {DURATIONS.map((d) => (
-            <option key={d} value={d}>{d >= 60 ? `${d / 60} hr` : `${d} min`}</option>
-          ))}
-        </select>
-
-        <label>Due Date</label>
-        <input type="date" value={draft.dueDate} onChange={(e) => setDraft({ ...draft, dueDate: e.target.value })} />
-
-        <div className="row-checks">
-          <label><input type="checkbox" checked={draft.urgent} onChange={(e) => setDraft({ ...draft, urgent: e.target.checked })} /> Urgent</label>
-          <label><input type="checkbox" checked={draft.important} onChange={(e) => setDraft({ ...draft, important: e.target.checked })} /> Important</label>
+          <label>
+            Duration
+            <select
+              value={draft.duration}
+              onChange={(event) => setDraft({ ...draft, duration: Number(event.target.value) as Duration })}
+            >
+              {DURATIONS.map((duration) => (
+                <option key={duration} value={duration}>
+                  {duration >= 60 ? `${duration / 60} hr` : `${duration} min`}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
 
-        <label>Notes</label>
-        <textarea value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} rows={4} />
+        <label>
+          Due Date
+          <input
+            type="date"
+            value={draft.dueDate}
+            onChange={(event) => setDraft({ ...draft, dueDate: event.target.value })}
+          />
+        </label>
 
-        <label>Links</label>
-        <div className="links-list">
-          {draft.links.map((link, i) => (
-            <input key={i} value={link} onChange={(e) => updateLink(i, e.target.value)} placeholder="https://" />
-          ))}
-          <button onClick={() => setDraft({ ...draft, links: [...draft.links, ''] })}>Add Link</button>
+        <div className="modal-grid-2 checks">
+          <label>
+            <input
+              type="checkbox"
+              checked={draft.urgent}
+              onChange={(event) => setDraft({ ...draft, urgent: event.target.checked })}
+            />
+            Urgent
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={draft.important}
+              onChange={(event) => setDraft({ ...draft, important: event.target.checked })}
+            />
+            Important
+          </label>
         </div>
 
-        <label>Attachments</label>
-        <input type="file" multiple onChange={(e) => addAttachment(e.target.files)} />
-        <div className="files-list">
-          {draft.attachments.map((file) => (
-            <a key={file.id} href={file.dataUrl} download={file.name}>{file.name}</a>
-          ))}
-        </div>
+        <label>
+          Notes
+          <textarea
+            rows={5}
+            value={draft.notes}
+            onChange={(event) => setDraft({ ...draft, notes: event.target.value })}
+          />
+        </label>
 
-        <footer>
-          <button className="danger" onClick={onDelete}>Delete Task</button>
+        <section className="modal-section">
+          <div className="section-title-row">
+            <strong className="section-title-icon">
+              <Link2 size={15} />
+              <span>Links</span>
+            </strong>
+          </div>
+
+          <div className="stack">
+            {draft.links.length === 0 && <p className="muted">No links yet.</p>}
+            {draft.links.map((link, index) => (
+              <div key={index} className="inline-row">
+                <a href={link} target="_blank" rel="noreferrer">
+                  {link}
+                </a>
+                <button className="link-icon-button" onClick={() => removeLink(index)} aria-label="Remove link">
+                  <X size={14} />
+                </button>
+              </div>
+            ))}
+            <div className="inline-row link-entry-row">
+              <input
+                placeholder="https://"
+                value={pendingLink}
+                onChange={(event) => setPendingLink(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    confirmPendingLink();
+                  }
+                }}
+              />
+              <div className="link-entry-actions">
+                <button
+                  className="link-icon-button"
+                  aria-label="Confirm link"
+                  disabled={!pendingLink.trim()}
+                  onClick={confirmPendingLink}
+                >
+                  <Check size={14} />
+                </button>
+                <button
+                  className="link-icon-button"
+                  aria-label="Clear link input"
+                  disabled={!pendingLink}
+                  onClick={() => setPendingLink('')}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="modal-section">
+          <div className="section-title-row">
+            <strong className="section-title-icon">
+              <Paperclip size={15} />
+              <span>Attachments</span>
+            </strong>
+          </div>
+          <div className="stack">
+            {draft.attachments.length === 0 && <p className="muted">No attachments yet.</p>}
+            {draft.attachments.map((attachment) => (
+              <div key={attachment.id} className="inline-row">
+                <a href={attachment.dataUrl} download={attachment.name}>
+                  {attachment.name}
+                </a>
+                <button className="icon-text-button" onClick={() => removeAttachment(attachment.id)}>
+                  <X size={14} />
+                  <span>Remove</span>
+                </button>
+              </div>
+            ))}
+          </div>
+          <input
+            ref={attachmentInputRef}
+            className="attachment-picker"
+            type="file"
+            multiple
+            onChange={(event) => {
+              onFilesSelected(event.target.files);
+              event.currentTarget.value = '';
+            }}
+          />
+        </section>
+
+        <footer className="task-modal-footer">
+          <button className="danger icon-text-button" onClick={onDelete}>
+            <Trash2 size={15} />
+            <span>Delete Task</span>
+          </button>
           <button
             onClick={() => {
-              onSave(draft);
+              onSave({
+                title: draft.title.trim() || task.title,
+                status: draft.status,
+                completed: draft.completed,
+                duration: draft.duration,
+                dueDate: draft.dueDate,
+                urgent: draft.urgent,
+                important: draft.important,
+                notes: draft.notes,
+                links: draft.links.map((link) => link.trim()).filter(Boolean),
+                attachments: draft.attachments,
+              });
               onClose();
             }}
           >
