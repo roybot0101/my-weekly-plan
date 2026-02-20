@@ -733,7 +733,7 @@ function App() {
 
   if (!hasSupabaseEnv) {
     return (
-      <div className="login-shell">
+      <div className="login-shell login-shell-grain">
         <main className="login-card">
           <h1>Supabase Required</h1>
           <p>Add environment variables to enable account-based auth and cloud persistence.</p>
@@ -746,7 +746,7 @@ function App() {
 
   if (initializing || loadingPlanner) {
     return (
-      <div className="login-shell">
+      <div className="login-shell login-shell-grain">
         <main className="login-card">
           <h1>Loading Planner</h1>
           <p>Connecting to your workspace...</p>
@@ -757,7 +757,7 @@ function App() {
 
   if (!userId) {
     return (
-      <div className="login-shell">
+      <div className="login-shell login-shell-grain">
         <main className="login-card">
           <h1 className="login-title-script">My Weekly Plan</h1>
           <p>Sign in to keep tasks synced to your account.</p>
@@ -804,18 +804,6 @@ function App() {
           </div>
 
           <div className="auth-actions oauth-actions oauth-brand-stack">
-            <button className="oauth-button oauth-facebook" onClick={() => void handleOAuth('facebook')}>
-              <span className="oauth-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
-                  <circle cx="12" cy="12" r="12" fill="#ffffff" />
-                  <path
-                    d="M13.37 8.35h1.64V5.5h-1.93c-2.52 0-3.9 1.54-3.9 4.1V11H7v2.68h2.18v4.82h2.93v-4.82h2.43l.39-2.68h-2.82V9.89c0-.88.3-1.54 1.26-1.54Z"
-                    fill="#1877f2"
-                  />
-                </svg>
-              </span>
-              <span>Continue with Facebook</span>
-            </button>
             <button className="oauth-button oauth-google" onClick={() => void handleOAuth('google')}>
               <span className="oauth-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
@@ -838,6 +826,18 @@ function App() {
                 </svg>
               </span>
               <span>Continue with Google</span>
+            </button>
+            <button className="oauth-button oauth-facebook" onClick={() => void handleOAuth('facebook')}>
+              <span className="oauth-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
+                  <circle cx="12" cy="12" r="12" fill="#ffffff" />
+                  <path
+                    d="M13.37 8.35h1.64V5.5h-1.93c-2.52 0-3.9 1.54-3.9 4.1V11H7v2.68h2.18v4.82h2.93v-4.82h2.43l.39-2.68h-2.82V9.89c0-.88.3-1.54 1.26-1.54Z"
+                    fill="#1877f2"
+                  />
+                </svg>
+              </span>
+              <span>Continue with Facebook</span>
             </button>
           </div>
         </main>
