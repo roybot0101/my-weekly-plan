@@ -850,7 +850,7 @@ function App() {
       <section className="header-hero">
         <header className="top-bar">
           <h1 className="header-title">My Weekly Plan</h1>
-          <img className="header-logo" src="/img/tempo.png" alt="My Weekly Plan" />
+          <img className="header-logo" src="/img/tempo2.png" alt="My Weekly Plan" />
           <div className="account-row">
             <span className="account-email">{userEmail || 'Signed in'}</span>
             <button className="account-link" type="button">Settings</button>

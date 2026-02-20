@@ -172,6 +172,7 @@ textarea {
   gap: 8px;
   margin-bottom: 0;
   position: relative;
+  min-height: 165px;
 }
 
 .header-title {
@@ -189,9 +190,14 @@ textarea {
 
 .header-logo {
   display: block;
-  height: 165px;
+  height: 250px;
   width: auto;
   object-fit: contain;
+  position: absolute;
+  left: 50%;
+  top: 0;
+  z-index: 1401;
+  transform: translate(-50%, -19px);
 }
 
 .account-row {
