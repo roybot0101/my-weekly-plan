@@ -18,8 +18,9 @@ type TaskCardProps = {
 
 function durationLabel(minutes: number) {
   if (minutes < 60) return `${minutes}m`;
-  if (minutes % 60 === 0) return `${minutes / 60}h`;
-  return `${minutes / 60}h`;
+  const hours = minutes / 60;
+  const rounded = Number(hours.toFixed(2));
+  return `${rounded % 1 === 0 ? rounded.toFixed(0) : rounded}h`;
 }
 
 function statusClass(status: Task['status']) {

@@ -107,7 +107,7 @@ export function TaskModal({ task, onClose, onSave, onDelete }: TaskModalProps) {
             >
               {DURATIONS.map((duration) => (
                 <option key={duration} value={duration}>
-                  {duration >= 60 ? `${duration / 60} hr` : `${duration} min`}
+                  {durationOptionLabel(duration)}
                 </option>
               ))}
             </select>
@@ -267,3 +267,10 @@ export function TaskModal({ task, onClose, onSave, onDelete }: TaskModalProps) {
     </div>
   );
 }
+  function durationOptionLabel(duration: number) {
+    if (duration < 60) return `${duration} min`;
+    if (duration % 60 === 0) return `${duration / 60} hr`;
+    const hours = Math.floor(duration / 60);
+    const minutes = duration % 60;
+    return `${hours} hr ${minutes} min`;
+  }

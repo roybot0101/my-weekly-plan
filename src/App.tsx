@@ -29,13 +29,24 @@ import {
   updateTask,
 } from './lib/cloudStore';
 import { hasSupabaseEnv } from './lib/supabase';
-import { DAY_NAMES, SLOT_HEIGHT, STATUS_ORDER, TOTAL_SLOTS, type Duration, type Task, type TaskStatus, type ViewMode } from './types';
+import {
+  DAY_NAMES,
+  SLOT_HEIGHT,
+  SLOT_MINUTES,
+  STATUS_ORDER,
+  TOTAL_SLOTS,
+  type Duration,
+  type Task,
+  type TaskStatus,
+  type ViewMode,
+} from './types';
 
 type DropTarget = { dayIndex: number; slot: number } | null;
 type AuthMode = 'sign-in' | 'sign-up';
-const SCHEDULED_CARD_TOP_OFFSET = 12;
-const SCHEDULED_CARD_BOTTOM_GAP = 6;
+const SCHEDULED_CARD_TOP_OFFSET = 3;
+const SCHEDULED_CARD_BOTTOM_GAP = 5;
 type KanbanDropTarget = { status: TaskStatus; insertIndex: number } | null;
+type FixedDayPill = { dayIndex: number; left: number };
 
 function App() {
   const [initializing, setInitializing] = useState(true);
@@ -73,12 +84,19 @@ function App() {
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [mobileDay, setMobileDay] = useState((new Date().getDay() + 6) % 7);
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
+  const [fixedDayPills, setFixedDayPills] = useState<FixedDayPill[]>([]);
   const draggingTaskIdRef = useRef<string | null>(null);
+  const dayHeaderRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const dayColumnRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const timelineGridRef = useRef<HTMLDivElement | null>(null);
+  const timelineAreaRef = useRef<HTMLElement | null>(null);
+  const timeAxisRef = useRef<HTMLDivElement | null>(null);
 
   const weekKey = selectedWeekStart;
   const now = new Date();
   const todayWeekKey = toLocalDateKey(weekStartMonday(now));
   const todayDayIndex = (now.getDay() + 6) % 7;
+  const slotsPerHour = 60 / SLOT_MINUTES;
 
   const taskById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
 
@@ -125,6 +143,58 @@ function App() {
   useEffect(() => {
     draggingTaskIdRef.current = draggingTaskId;
   }, [draggingTaskId]);
+
+  useEffect(() => {
+    if (viewMode !== 'plan') {
+      setFixedDayPills([]);
+      return;
+    }
+
+    const updateStickyPills = () => {
+      const stickyBar = document.querySelector('.sticky-planning-bar') as HTMLElement | null;
+      const stickyBottom = Math.max(0, Math.ceil(stickyBar?.getBoundingClientRect().bottom ?? 0));
+      document.documentElement.style.setProperty('--sticky-bar-bottom', `${stickyBottom}px`);
+      const timelineRect = timelineAreaRef.current?.getBoundingClientRect();
+      const axisRect = timeAxisRef.current?.getBoundingClientRect();
+      const calendarLeftCutoff = axisRect ? axisRect.right + 2 : (timelineRect?.left ?? 0) + 52;
+      const calendarRightEdge = timelineRect?.right ?? window.innerWidth;
+
+      const next: FixedDayPill[] = [];
+      DAY_NAMES.forEach((_, dayIndex) => {
+        const header = dayHeaderRefs.current[dayIndex];
+        const column = dayColumnRefs.current[dayIndex];
+        if (!header) return;
+        if (!column) return;
+        const rect = header.getBoundingClientRect();
+        const colRect = column.getBoundingClientRect();
+        const isVisible =
+          colRect.left > calendarLeftCutoff &&
+          colRect.left < calendarRightEdge &&
+          colRect.right > calendarLeftCutoff;
+        if (rect.top < stickyBottom && isVisible) {
+          next.push({
+            dayIndex,
+            left: colRect.left + colRect.width / 2,
+          });
+        }
+      });
+
+      setFixedDayPills(next);
+    };
+
+    let rafId = 0;
+    const tick = () => {
+      updateStickyPills();
+      rafId = window.requestAnimationFrame(tick);
+    };
+
+    tick();
+    window.addEventListener('resize', updateStickyPills);
+    return () => {
+      window.removeEventListener('resize', updateStickyPills);
+      if (rafId) window.cancelAnimationFrame(rafId);
+    };
+  }, [viewMode, weekKey, mobileDay]);
 
   useEffect(() => {
     if (!saving) {
@@ -223,9 +293,9 @@ function App() {
 
     const onMove = (moveEvent: MouseEvent) => {
       const deltaSlots = Math.round((moveEvent.clientY - startY) / SLOT_HEIGHT);
-      const targetMinutes = startDuration + deltaSlots * 30;
-      const snapped = Math.round(targetMinutes / 30) * 30;
-      const nextDuration = Math.max(30, Math.min(240, snapped)) as Duration;
+      const targetMinutes = startDuration + deltaSlots * SLOT_MINUTES;
+      const snapped = Math.round(targetMinutes / SLOT_MINUTES) * SLOT_MINUTES;
+      const nextDuration = Math.max(SLOT_MINUTES, Math.min(240, snapped)) as Duration;
       setResizePreviewDuration(nextDuration);
     };
 
@@ -233,9 +303,9 @@ function App() {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       const deltaSlots = Math.round((upEvent.clientY - startY) / SLOT_HEIGHT);
-      const targetMinutes = startDuration + deltaSlots * 30;
-      const snapped = Math.round(targetMinutes / 30) * 30;
-      const nextDuration = Math.max(30, Math.min(240, snapped)) as Duration;
+      const targetMinutes = startDuration + deltaSlots * SLOT_MINUTES;
+      const snapped = Math.round(targetMinutes / SLOT_MINUTES) * SLOT_MINUTES;
+      const nextDuration = Math.max(SLOT_MINUTES, Math.min(240, snapped)) as Duration;
       setResizingTaskId(null);
       setResizePreviewDuration(null);
       if (nextDuration !== startDuration) {
@@ -1070,6 +1140,7 @@ function App() {
         ) : (
           <section
             className="timeline-area"
+            ref={timelineAreaRef}
             onTouchStart={(event) => setTouchStartX(event.touches[0]?.clientX ?? null)}
             onTouchEnd={(event) => {
               if (touchStartX === null) return;
@@ -1088,7 +1159,26 @@ function App() {
               <button onClick={() => setMobileDay((current) => (current + 1) % 7)}>Next Day</button>
             </div>
 
-            <div className="timeline-grid">
+            <div className="timeline-grid" ref={timelineGridRef}>
+              <div className="time-axis-column" aria-hidden="true" ref={timeAxisRef}>
+                <div className="time-axis-header" />
+                <div className="time-axis-track">
+                  {Array.from({ length: TOTAL_SLOTS }).map((_, slot) => {
+                    const isHour = slot % slotsPerHour === 0;
+                    const hourBand = Math.floor(slot / slotsPerHour) % 2 === 0 ? 'band-a' : 'band-b';
+                    return (
+                      <div
+                        key={`time-axis-${slot}`}
+                        className={`time-axis-slot ${hourBand} ${isHour ? 'hour' : 'quarter'}`}
+                        style={{ height: SLOT_HEIGHT }}
+                      >
+                        {isHour && <span className="time-axis-label">{timeLabel(slot)}</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
               {DAY_NAMES.map((dayName, dayIndex) => {
                 const isToday = weekKey === todayWeekKey && dayIndex === todayDayIndex;
                 const dayTasks = weekTasks
@@ -1101,27 +1191,32 @@ function App() {
                   <div
                     key={dayName}
                     className={`day-column ${isToday ? 'today' : ''} ${mobileDay === dayIndex ? 'mobile-visible' : ''}`}
+                    ref={(element) => {
+                      dayColumnRefs.current[dayIndex] = element;
+                    }}
                   >
-                    <div className="day-header">
+                    <div
+                      className="day-header"
+                      ref={(element) => {
+                        dayHeaderRefs.current[dayIndex] = element;
+                      }}
+                    >
                       <h3>{dayName}</h3>
                       <span>{formatDayLabel(weekKey, dayIndex)}</span>
                     </div>
-
                     <div className="day-track" data-day-track={dayIndex}>
                       {Array.from({ length: TOTAL_SLOTS }).map((_, slot) => {
-                        const isHour = slot % 2 === 0;
-                        const hourBand = Math.floor(slot / 2) % 2 === 0 ? 'band-a' : 'band-b';
+                        const isHour = slot % slotsPerHour === 0;
+                        const hourBand = Math.floor(slot / slotsPerHour) % 2 === 0 ? 'band-a' : 'band-b';
                         const isDropTarget = dropTarget?.dayIndex === dayIndex && dropTarget.slot === slot;
                         return (
                           <div
                             key={slot}
                             data-drop-slot={`${dayIndex}:${slot}`}
-                            className={`time-slot ${isHour ? 'hour' : 'half'} ${hourBand} ${isDropTarget ? 'drop-target' : ''}`}
+                            className={`time-slot ${isHour ? 'hour' : 'quarter'} ${hourBand} ${isDropTarget ? 'drop-target' : ''}`}
                             style={{ height: SLOT_HEIGHT }}
                             onClick={() => void handleCreateTaskAtSlot(dayIndex, slot)}
-                          >
-                            <span className="time-label">{timeLabel(slot)}</span>
-                          </div>
+                          />
                         );
                       })}
 
@@ -1182,6 +1277,12 @@ function App() {
                 );
               })}
             </div>
+
+            {fixedDayPills.map((pill) => (
+              <div key={`fixed-pill-${pill.dayIndex}`} className="day-fixed-pill" style={{ left: pill.left }}>
+                {DAY_NAMES[pill.dayIndex]}
+              </div>
+            ))}
           </section>
         )}
       </div>

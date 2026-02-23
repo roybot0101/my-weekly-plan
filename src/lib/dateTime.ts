@@ -64,12 +64,13 @@ export function formatDayLabel(weekStartKey: string, dayIndex: number): string {
 }
 
 export function timeLabel(slot: number) {
+  const slotsPerHour = 60 / SLOT_MINUTES;
+  if (slot % slotsPerHour !== 0) return '';
   const totalMinutes = START_HOUR * 60 + slot * SLOT_MINUTES;
   const h24 = Math.floor(totalMinutes / 60);
-  const mins = totalMinutes % 60;
   const period = h24 >= 12 ? 'PM' : 'AM';
   const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
-  return `${h12}:${`${mins}`.padStart(2, '0')} ${period}`;
+  return `${h12} ${period}`;
 }
 
 export function durationToSlots(duration: Duration) {
