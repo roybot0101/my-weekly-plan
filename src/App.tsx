@@ -601,6 +601,39 @@ function App() {
     }
   }
 
+  function isSlotOccupied(dayIndex: number, slot: number) {
+    return weekTasks.some((task) => {
+      if (task.scheduled?.dayIndex !== dayIndex) return false;
+      const start = task.scheduled.slot;
+      const end = start + durationToSlots(task.duration);
+      return slot >= start && slot < end;
+    });
+  }
+
+  async function handleCreateTaskAtSlot(dayIndex: number, slot: number) {
+    if (!userId || saving || draggingTaskId || resizingTaskId) return;
+    if (isSlotOccupied(dayIndex, slot)) return;
+
+    setSaving(true);
+    try {
+      const created = await createTask(userId, 'New Task');
+      const scheduledTask = await updateTask(userId, created.id, {
+        scheduled: makeScheduled(weekKey, dayIndex, slot),
+      });
+      setTasks((current) => [scheduledTask, ...current]);
+
+      const nextKanbanOrder = [scheduledTask.id, ...kanbanOrder.filter((id) => id !== scheduledTask.id)];
+      await persistKanbanOrder(nextKanbanOrder);
+
+      setEditingTitleTaskId(scheduledTask.id);
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to create task.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function patchTask(taskId: string, patch: Partial<Task>) {
     if (!userId) return;
 
@@ -1085,6 +1118,7 @@ function App() {
                             data-drop-slot={`${dayIndex}:${slot}`}
                             className={`time-slot ${isHour ? 'hour' : 'half'} ${hourBand} ${isDropTarget ? 'drop-target' : ''}`}
                             style={{ height: SLOT_HEIGHT }}
+                            onClick={() => void handleCreateTaskAtSlot(dayIndex, slot)}
                           >
                             <span className="time-label">{timeLabel(slot)}</span>
                           </div>
