@@ -71,6 +71,15 @@ function taskPatchToRowPatch(patch: Partial<Task>) {
   return rowPatch;
 }
 
+function randomUuidFallback() {
+  const template = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx';
+  return template.replace(/[xy]/g, (char) => {
+    const rand = Math.floor(Math.random() * 16);
+    const value = char === 'x' ? rand : (rand & 0x3) | 0x8;
+    return value.toString(16);
+  });
+}
+
 export async function getSessionUser() {
   const client = requireClient();
   const { data, error } = await client.auth.getUser();
@@ -244,7 +253,10 @@ export async function createTask(userId: string, title: string): Promise<Task> {
   const client = requireClient();
 
   const now = new Date().toISOString();
-  const id = crypto.randomUUID();
+  const id =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : randomUuidFallback();
 
   const { data, error } = await client
     .from('tasks')

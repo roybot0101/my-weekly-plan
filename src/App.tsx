@@ -1,5 +1,5 @@
-import { type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Calendar, CalendarDays, Check, ChevronLeft, ChevronRight, Columns3, Plus } from 'lucide-react';
+import { type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { Calendar, CalendarCheck, CalendarDays, Check, ChevronLeft, ChevronRight, Columns3, Plus } from 'lucide-react';
 import { TaskCard } from './components/TaskCard';
 import { TaskModal } from './components/TaskModal';
 import {
@@ -46,7 +46,7 @@ type AuthMode = 'sign-in' | 'sign-up';
 const SCHEDULED_CARD_TOP_OFFSET = 3;
 const SCHEDULED_CARD_BOTTOM_GAP = 5;
 type KanbanDropTarget = { status: TaskStatus; insertIndex: number } | null;
-type FixedDayPill = { dayIndex: number; left: number };
+type FloatingDayPill = { dayIndex: number; left: number };
 
 function App() {
   const [initializing, setInitializing] = useState(true);
@@ -80,11 +80,13 @@ function App() {
   const [taskInModal, setTaskInModal] = useState<string | null>(null);
   const [resizingTaskId, setResizingTaskId] = useState<string | null>(null);
   const [resizePreviewDuration, setResizePreviewDuration] = useState<Duration | null>(null);
-  const [editingTitleTaskId, setEditingTitleTaskId] = useState<string | null>(null);
   const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [mobileBacklogTitle, setMobileBacklogTitle] = useState('');
   const [mobileDay, setMobileDay] = useState((new Date().getDay() + 6) % 7);
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
-  const [fixedDayPills, setFixedDayPills] = useState<FixedDayPill[]>([]);
+  const [mobileSlotPicker, setMobileSlotPicker] = useState<{ dayIndex: number; slot: number } | null>(null);
+  const [mobileSlotPickerError, setMobileSlotPickerError] = useState<string | null>(null);
+  const [fixedDayPills, setFixedDayPills] = useState<FloatingDayPill[]>([]);
   const draggingTaskIdRef = useRef<string | null>(null);
   const dayHeaderRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const dayColumnRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -99,6 +101,10 @@ function App() {
   const slotsPerHour = 60 / SLOT_MINUTES;
 
   const taskById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
+  const mobileTimelineStyle = useMemo(
+    () => ({ '--mobile-day-index': mobileDay } as CSSProperties),
+    [mobileDay],
+  );
 
   function sortTasksByOrder(taskList: Task[], orderedIds: string[]) {
     const rank = new Map(orderedIds.map((id, index) => [id, index]));
@@ -123,6 +129,19 @@ function App() {
   const completionPct = weekTasks.length === 0 ? 0 : Math.round((completedCount / weekTasks.length) * 100);
 
   const modalTask = taskInModal ? taskById.get(taskInModal) : undefined;
+
+  function isMobileViewport() {
+    return typeof window !== 'undefined' && window.matchMedia('(max-width: 1120px)').matches;
+  }
+
+  function slotTimeLabel(slot: number) {
+    const totalMinutes = 5 * 60 + slot * SLOT_MINUTES;
+    const h24 = Math.floor(totalMinutes / 60);
+    const mins = `${totalMinutes % 60}`.padStart(2, '0');
+    const period = h24 >= 12 ? 'PM' : 'AM';
+    const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+    return `${h12}:${mins} ${period}`;
+  }
 
   async function refreshPlannerData(nextUserId: string) {
     setLoadingPlanner(true);
@@ -155,11 +174,10 @@ function App() {
       const stickyBottom = Math.max(0, Math.ceil(stickyBar?.getBoundingClientRect().bottom ?? 0));
       document.documentElement.style.setProperty('--sticky-bar-bottom', `${stickyBottom}px`);
       const timelineRect = timelineAreaRef.current?.getBoundingClientRect();
-      const axisRect = timeAxisRef.current?.getBoundingClientRect();
-      const calendarLeftCutoff = axisRect ? axisRect.right + 2 : (timelineRect?.left ?? 0) + 52;
+      const calendarLeftEdge = timelineRect?.left ?? 0;
       const calendarRightEdge = timelineRect?.right ?? window.innerWidth;
 
-      const next: FixedDayPill[] = [];
+      const next: FloatingDayPill[] = [];
       DAY_NAMES.forEach((_, dayIndex) => {
         const header = dayHeaderRefs.current[dayIndex];
         const column = dayColumnRefs.current[dayIndex];
@@ -168,13 +186,12 @@ function App() {
         const rect = header.getBoundingClientRect();
         const colRect = column.getBoundingClientRect();
         const isVisible =
-          colRect.left > calendarLeftCutoff &&
           colRect.left < calendarRightEdge &&
-          colRect.right > calendarLeftCutoff;
+          colRect.right > calendarLeftEdge;
         if (rect.top < stickyBottom && isVisible) {
           next.push({
             dayIndex,
-            left: colRect.left + colRect.width / 2,
+            left: colRect.left + colRect.width / 2 - calendarLeftEdge,
           });
         }
       });
@@ -583,8 +600,8 @@ function App() {
     await persistKanbanOrder(nextKanbanOrder);
   }
 
-  function onTaskHandleMouseDown(taskId: string, event: ReactMouseEvent<HTMLDivElement>) {
-    if (event.button !== 0) return;
+  function onTaskHandlePointerDown(taskId: string, event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
     event.preventDefault();
 
     const card = (event.currentTarget as HTMLElement).closest('.task-card') as HTMLElement | null;
@@ -601,14 +618,15 @@ function App() {
     });
     updateHoverTargets(event.clientX, event.clientY);
 
-    const onMove = (moveEvent: MouseEvent) => {
+    const onMove = (moveEvent: PointerEvent) => {
       setDragCursor({ x: moveEvent.clientX, y: moveEvent.clientY });
       updateHoverTargets(moveEvent.clientX, moveEvent.clientY);
     };
 
-    const onUp = (upEvent: MouseEvent) => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+    const onUp = (upEvent: PointerEvent) => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
 
       const dragTaskId = draggingTaskIdRef.current;
       if (!dragTaskId) {
@@ -646,8 +664,9 @@ function App() {
       clearDragState();
     };
 
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
   }
 
   async function handleCreateTask() {
@@ -671,6 +690,33 @@ function App() {
     }
   }
 
+  async function scheduleTaskAtSlot(taskId: string, dayIndex: number, slot: number) {
+    const shiftPlan = buildStableShiftPlan(taskId, dayIndex, slot);
+    if (shiftPlan) {
+      await applyShiftPlan(shiftPlan.dayIndex, shiftPlan.patches);
+      return;
+    }
+    const nextSlot = findNearestAvailableSlot(taskId, dayIndex, slot);
+    if (nextSlot === null) {
+      setErrorMessage('No room in that day for this task duration.');
+      return;
+    }
+    await moveTaskToTimeline(taskId, dayIndex, nextSlot);
+    setErrorMessage(null);
+  }
+
+  async function createAndScheduleTaskAtSlot(title: string, dayIndex: number, slot: number) {
+    if (!userId) return null;
+    const task = await createTask(userId, title);
+    const scheduledTask = await updateTask(userId, task.id, {
+      scheduled: makeScheduled(weekKey, dayIndex, slot),
+    });
+    setTasks((current) => [scheduledTask, ...current]);
+    const nextKanbanOrder = [scheduledTask.id, ...kanbanOrder.filter((id) => id !== scheduledTask.id)];
+    void persistKanbanOrder(nextKanbanOrder);
+    return scheduledTask;
+  }
+
   function isSlotOccupied(dayIndex: number, slot: number) {
     return weekTasks.some((task) => {
       if (task.scheduled?.dayIndex !== dayIndex) return false;
@@ -684,21 +730,59 @@ function App() {
     if (!userId || saving || draggingTaskId || resizingTaskId) return;
     if (isSlotOccupied(dayIndex, slot)) return;
 
+    if (isMobileViewport() && viewMode === 'plan') {
+      setMobileSlotPicker({ dayIndex, slot });
+      setMobileBacklogTitle('');
+      setMobileSlotPickerError(null);
+      return;
+    }
+
     setSaving(true);
     try {
-      const created = await createTask(userId, 'New Task');
-      const scheduledTask = await updateTask(userId, created.id, {
-        scheduled: makeScheduled(weekKey, dayIndex, slot),
-      });
-      setTasks((current) => [scheduledTask, ...current]);
-
-      const nextKanbanOrder = [scheduledTask.id, ...kanbanOrder.filter((id) => id !== scheduledTask.id)];
-      await persistKanbanOrder(nextKanbanOrder);
-
-      setEditingTitleTaskId(scheduledTask.id);
+      const created = await createAndScheduleTaskAtSlot('New Task', dayIndex, slot);
+      if (!created) return;
+      setTaskInModal(created.id);
       setErrorMessage(null);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to create task.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleCreateAndAssignMobileTask() {
+    if (!mobileSlotPicker) return;
+    const title = mobileBacklogTitle.trim();
+    if (!title || !userId) {
+      setMobileSlotPickerError('Enter a task title first.');
+      return;
+    }
+
+    setSaving(true);
+    setMobileSlotPickerError(null);
+    try {
+      const created = await createAndScheduleTaskAtSlot(title, mobileSlotPicker.dayIndex, mobileSlotPicker.slot);
+      if (!created) return;
+      setMobileBacklogTitle('');
+      setMobileSlotPicker(null);
+      setErrorMessage(null);
+    } catch (error) {
+      setMobileSlotPickerError(error instanceof Error ? error.message : 'Failed to create task.');
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to create task.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleAssignExistingTaskToMobileSlot(taskId: string) {
+    if (!mobileSlotPicker) return;
+    setSaving(true);
+    try {
+      await scheduleTaskAtSlot(taskId, mobileSlotPicker.dayIndex, mobileSlotPicker.slot);
+      setMobileSlotPicker(null);
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to schedule task.');
     } finally {
       setSaving(false);
     }
@@ -990,6 +1074,33 @@ function App() {
               <span>This Week</span>
             </button>
           </div>
+          <div className="mobile-day-nav-inline">
+            <button
+              className="icon-text-button"
+              aria-label="Previous day"
+              onClick={() => setMobileDay((current) => (current + 6) % 7)}
+            >
+              <ChevronLeft size={15} />
+            </button>
+            <strong>{DAY_NAMES[mobileDay]}</strong>
+            <button
+              className="icon-text-button"
+              aria-label="Next day"
+              onClick={() => setMobileDay((current) => (current + 1) % 7)}
+            >
+              <ChevronRight size={15} />
+            </button>
+            <button
+              className="icon-text-button"
+              aria-label="Go to current day"
+              onClick={() => {
+                void changeSelectedWeek(nowWeekStartKey());
+                setMobileDay(todayDayIndex);
+              }}
+            >
+              <CalendarCheck size={15} />
+            </button>
+          </div>
           <div className="view-toggle" role="tablist" aria-label="View mode">
             <button
               className={`icon-text-button view-toggle-button ${viewMode === 'plan' ? 'active' : ''}`}
@@ -1038,7 +1149,7 @@ function App() {
           data-drop-backlog="1"
           className={`backlog-panel ${viewMode === 'plan' ? 'plan-sticky' : ''} ${dragOverBacklog ? 'drop-active' : ''}`}
         >
-          <h2>Backlog</h2>
+          <h2>To-do List</h2>
 
           <div className="new-task-row">
             <input
@@ -1070,9 +1181,6 @@ function App() {
                   )}
                   <TaskCard
                     task={task}
-                    isTitleEditing={editingTitleTaskId === task.id}
-                    onTitleEditToggle={(editing) => setEditingTitleTaskId(editing ? task.id : null)}
-                    onTitleSave={(title) => void patchTask(task.id, { title })}
                     onOpenDetails={() => setTaskInModal(task.id)}
                     onToggleComplete={() =>
                       void patchTask(task.id, {
@@ -1080,7 +1188,7 @@ function App() {
                         status: !task.completed ? 'Done' : task.status === 'Done' ? 'Not Started' : task.status,
                       })
                     }
-                    onHandleMouseDown={(event) => onTaskHandleMouseDown(task.id, event)}
+                    onHandlePointerDown={(event) => onTaskHandlePointerDown(task.id, event)}
                     isDragging={draggingTaskId === task.id}
                   />
                 </div>
@@ -1113,9 +1221,6 @@ function App() {
                         <TaskCard
                           task={task}
                           compact
-                          isTitleEditing={editingTitleTaskId === task.id}
-                          onTitleEditToggle={(editing) => setEditingTitleTaskId(editing ? task.id : null)}
-                          onTitleSave={(title) => void patchTask(task.id, { title })}
                           onOpenDetails={() => setTaskInModal(task.id)}
                           onToggleComplete={() =>
                             void patchTask(task.id, {
@@ -1123,7 +1228,7 @@ function App() {
                               status: !task.completed ? 'Done' : task.status === 'Done' ? 'Not Started' : task.status,
                             })
                           }
-                          onHandleMouseDown={(event) => onTaskHandleMouseDown(task.id, event)}
+                          onHandlePointerDown={(event) => onTaskHandlePointerDown(task.id, event)}
                           isDragging={draggingTaskId === task.id}
                         />
                       </div>
@@ -1153,13 +1258,15 @@ function App() {
               setTouchStartX(null);
             }}
           >
-            <div className="mobile-day-nav">
-              <button onClick={() => setMobileDay((current) => (current + 6) % 7)}>Previous Day</button>
-              <strong>{DAY_NAMES[mobileDay]}</strong>
-              <button onClick={() => setMobileDay((current) => (current + 1) % 7)}>Next Day</button>
+            <div className="day-pill-layer" aria-hidden="true">
+              {fixedDayPills.map((pill) => (
+                <div key={`fixed-pill-${pill.dayIndex}`} className="day-scroll-pill" style={{ left: pill.left }}>
+                  {DAY_NAMES[pill.dayIndex]}
+                </div>
+              ))}
             </div>
 
-            <div className="timeline-grid" ref={timelineGridRef}>
+            <div className="timeline-grid" ref={timelineGridRef} style={mobileTimelineStyle}>
               <div className="time-axis-column" aria-hidden="true" ref={timeAxisRef}>
                 <div className="time-axis-header" />
                 <div className="time-axis-track">
@@ -1237,9 +1344,6 @@ function App() {
                             <TaskCard
                               task={task}
                               compact
-                              isTitleEditing={editingTitleTaskId === task.id}
-                              onTitleEditToggle={(editing) => setEditingTitleTaskId(editing ? task.id : null)}
-                              onTitleSave={(title) => void patchTask(task.id, { title })}
                               onOpenDetails={() => setTaskInModal(task.id)}
                               onToggleComplete={() =>
                                 void patchTask(task.id, {
@@ -1247,7 +1351,7 @@ function App() {
                                   status: !task.completed ? 'Done' : task.status === 'Done' ? 'Not Started' : task.status,
                                 })
                               }
-                              onHandleMouseDown={(event) => onTaskHandleMouseDown(task.id, event)}
+                              onHandlePointerDown={(event) => onTaskHandlePointerDown(task.id, event)}
                               onResizeMouseDown={(event) => startTaskResize(task, event)}
                               resizable
                               isDragging={draggingTaskId === task.id}
@@ -1278,11 +1382,6 @@ function App() {
               })}
             </div>
 
-            {fixedDayPills.map((pill) => (
-              <div key={`fixed-pill-${pill.dayIndex}`} className="day-fixed-pill" style={{ left: pill.left }}>
-                {DAY_NAMES[pill.dayIndex]}
-              </div>
-            ))}
           </section>
         )}
       </div>
@@ -1297,6 +1396,68 @@ function App() {
           }}
           onSave={(patch) => void patchTask(modalTask.id, patch)}
         />
+      )}
+
+      {mobileSlotPicker && viewMode === 'plan' && (
+        <div className="mobile-slot-picker-backdrop" onClick={() => setMobileSlotPicker(null)}>
+          <section className="mobile-slot-picker" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <h3>
+                Add Task: {DAY_NAMES[mobileSlotPicker.dayIndex]} {slotTimeLabel(mobileSlotPicker.slot)}
+              </h3>
+              <button type="button" onClick={() => setMobileSlotPicker(null)}>Close</button>
+            </header>
+
+            <form
+              className="new-task-row"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void handleCreateAndAssignMobileTask();
+              }}
+            >
+              <input
+                placeholder="Add new task title"
+                value={mobileBacklogTitle}
+                onChange={(event) => {
+                  setMobileBacklogTitle(event.target.value);
+                  if (mobileSlotPickerError) setMobileSlotPickerError(null);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void handleCreateAndAssignMobileTask();
+                }}
+              />
+              <button
+                type="submit"
+                className="icon-text-button"
+                aria-label="Create and assign task"
+                disabled={!mobileBacklogTitle.trim() || saving}
+                onClick={() => void handleCreateAndAssignMobileTask()}
+              >
+                <Plus size={15} />
+              </button>
+            </form>
+
+            {mobileSlotPickerError && <p className="mobile-slot-error">{mobileSlotPickerError}</p>}
+
+            <div className="mobile-slot-task-list">
+              {backlogTasks.length === 0 ? (
+                <p className="muted">No backlog tasks yet.</p>
+              ) : (
+                backlogTasks.map((task) => (
+                  <button
+                    type="button"
+                    key={task.id}
+                    className="mobile-slot-task-option"
+                    disabled={saving}
+                    onClick={() => void handleAssignExistingTaskToMobileSlot(task.id)}
+                  >
+                    {task.title}
+                  </button>
+                ))
+              )}
+            </div>
+          </section>
+        </div>
       )}
     </div>
   );

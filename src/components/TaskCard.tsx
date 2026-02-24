@@ -1,17 +1,14 @@
-import { type MouseEvent, useEffect, useState } from 'react';
+import { type MouseEvent, type PointerEvent } from 'react';
 import { GripVertical } from 'lucide-react';
 import { type Task } from '../types';
 
 type TaskCardProps = {
   task: Task;
-  isTitleEditing: boolean;
   compact?: boolean;
   resizable?: boolean;
-  onTitleEditToggle: (editing: boolean) => void;
-  onTitleSave: (title: string) => void;
   onToggleComplete: () => void;
   onOpenDetails: () => void;
-  onHandleMouseDown: (event: MouseEvent<HTMLDivElement>) => void;
+  onHandlePointerDown: (event: PointerEvent<HTMLDivElement>) => void;
   onResizeMouseDown?: (event: MouseEvent<HTMLDivElement>) => void;
   isDragging?: boolean;
 };
@@ -33,23 +30,14 @@ function statusClass(status: Task['status']) {
 
 export function TaskCard({
   task,
-  isTitleEditing,
   compact,
   resizable,
-  onTitleEditToggle,
-  onTitleSave,
   onToggleComplete,
   onOpenDetails,
-  onHandleMouseDown,
+  onHandlePointerDown,
   onResizeMouseDown,
   isDragging,
 }: TaskCardProps) {
-  const [draft, setDraft] = useState(task.title);
-
-  useEffect(() => {
-    setDraft(task.title);
-  }, [task.title]);
-
   return (
     <article
       className={`task-card ${statusClass(task.status)} ${task.completed ? 'done' : ''} ${compact ? 'compact' : ''} ${isDragging ? 'drag-origin' : ''}`}
@@ -80,42 +68,7 @@ export function TaskCard({
         />
 
         <div className="task-content">
-          {isTitleEditing ? (
-            <input
-              className="task-title-input"
-              autoFocus
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onBlur={() => {
-                const next = draft.trim() || task.title;
-                onTitleSave(next);
-                onTitleEditToggle(false);
-              }}
-              onClick={(event) => event.stopPropagation()}
-              onKeyDown={(event) => {
-                event.stopPropagation();
-                if (event.key === 'Enter') {
-                  const next = draft.trim() || task.title;
-                  onTitleSave(next);
-                  onTitleEditToggle(false);
-                }
-                if (event.key === 'Escape') {
-                  setDraft(task.title);
-                  onTitleEditToggle(false);
-                }
-              }}
-            />
-          ) : (
-            <h4
-              className="task-title"
-              onClick={(event) => {
-                event.stopPropagation();
-                onTitleEditToggle(true);
-              }}
-            >
-              {task.title}
-            </h4>
-          )}
+          <h4 className="task-title">{task.title}</h4>
 
           <div className="task-meta">
             {task.dueDate && <span>Due {task.dueDate}</span>}
@@ -130,9 +83,9 @@ export function TaskCard({
         role="button"
         tabIndex={0}
         aria-label={`Drag ${task.title}`}
-        onMouseDown={(event) => {
+        onPointerDown={(event) => {
           event.stopPropagation();
-          onHandleMouseDown(event);
+          onHandlePointerDown(event);
         }}
         onClick={(event) => event.stopPropagation()}
       >
