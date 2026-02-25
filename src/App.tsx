@@ -1,4 +1,13 @@
-import { type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Calendar, CalendarCheck, CalendarDays, Check, ChevronLeft, ChevronRight, Columns3, Plus } from 'lucide-react';
 import { TaskCard } from './components/TaskCard';
 import { TaskModal } from './components/TaskModal';
@@ -47,6 +56,7 @@ const SCHEDULED_CARD_TOP_OFFSET = 3;
 const SCHEDULED_CARD_BOTTOM_GAP = 5;
 type KanbanDropTarget = { status: TaskStatus; insertIndex: number } | null;
 type FloatingDayPill = { dayIndex: number; left: number };
+const MOBILE_DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 
 function App() {
   const [initializing, setInitializing] = useState(true);
@@ -87,12 +97,15 @@ function App() {
   const [mobileSlotPicker, setMobileSlotPicker] = useState<{ dayIndex: number; slot: number } | null>(null);
   const [mobileSlotPickerError, setMobileSlotPickerError] = useState<string | null>(null);
   const [fixedDayPills, setFixedDayPills] = useState<FloatingDayPill[]>([]);
+  const [headerCollapsed, setHeaderCollapsed] = useState(false);
   const draggingTaskIdRef = useRef<string | null>(null);
   const dayHeaderRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const dayColumnRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const timelineGridRef = useRef<HTMLDivElement | null>(null);
   const timelineAreaRef = useRef<HTMLElement | null>(null);
   const timeAxisRef = useRef<HTMLDivElement | null>(null);
+  const headerHeroRef = useRef<HTMLElement | null>(null);
+  const stickyPlanningBarRef = useRef<HTMLElement | null>(null);
 
   const weekKey = selectedWeekStart;
   const now = new Date();
@@ -223,6 +236,26 @@ function App() {
     }, 300);
     return () => window.clearInterval(timer);
   }, [saving]);
+
+  useEffect(() => {
+    const updateHeaderCollapsed = () => {
+      const hero = headerHeroRef.current;
+      const stickyBar = stickyPlanningBarRef.current;
+      if (!hero || !stickyBar) return;
+      const heroRect = hero.getBoundingClientRect();
+      const stickyHeight = stickyBar.getBoundingClientRect().height;
+      const next = heroRect.bottom <= stickyHeight + 4;
+      setHeaderCollapsed((current) => (current === next ? current : next));
+    };
+
+    updateHeaderCollapsed();
+    window.addEventListener('scroll', updateHeaderCollapsed, { passive: true });
+    window.addEventListener('resize', updateHeaderCollapsed);
+    return () => {
+      window.removeEventListener('scroll', updateHeaderCollapsed);
+      window.removeEventListener('resize', updateHeaderCollapsed);
+    };
+  }, []);
 
   useEffect(() => {
     if (!hasSupabaseEnv) {
@@ -690,6 +723,14 @@ function App() {
     }
   }
 
+  function handleBacklogWheel(event: ReactWheelEvent<HTMLDivElement>) {
+    if (viewMode !== 'plan') return;
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 1120px)').matches) return;
+    if (headerCollapsed) return;
+    event.preventDefault();
+    window.scrollBy({ top: event.deltaY, left: 0, behavior: 'auto' });
+  }
+
   async function scheduleTaskAtSlot(taskId: string, dayIndex: number, slot: number) {
     const shiftPlan = buildStableShiftPlan(taskId, dayIndex, slot);
     if (shiftPlan) {
@@ -945,9 +986,14 @@ function App() {
   if (!userId) {
     return (
       <div className="login-shell login-shell-grain">
-        <main className="login-card">
-          <h1 className="login-title-script">My Weekly Plan</h1>
-          <p>Sign in to keep tasks synced to your account.</p>
+        <div className="login-stack">
+          <div className="login-brand" aria-hidden="true">
+            <img className="login-brand-icon logo-entrance" src="/img/tempo-icon.png" alt="" />
+            <h1 className="login-title-script">My Weekly Plan</h1>
+          </div>
+
+          <main className="login-card">
+          <p>Stop guessing what to do—turn your week into easy wins.</p>
 
           {errorMessage && <div className="error-banner">{errorMessage}</div>}
 
@@ -1012,7 +1058,7 @@ function App() {
                   />
                 </svg>
               </span>
-              <span>Continue with Google</span>
+              <span>Continue</span>
             </button>
             <button className="oauth-button oauth-facebook" onClick={() => void handleOAuth('facebook')}>
               <span className="oauth-icon" aria-hidden="true">
@@ -1024,19 +1070,23 @@ function App() {
                   />
                 </svg>
               </span>
-              <span>Continue with Facebook</span>
+              <span>Continue</span>
             </button>
           </div>
-        </main>
+          </main>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className={`planner-shell grain-bg view-${viewMode}`}>
-      <section className="header-hero">
+    <div className={`planner-shell grain-bg view-${viewMode} ${headerCollapsed ? 'header-collapsed' : ''}`}>
+      <section className="header-hero" ref={headerHeroRef}>
         <header className="top-bar">
-          <h1 className="header-title">My Weekly Plan</h1>
+          <div className="header-brand" aria-hidden="true">
+            <img className="header-title-icon logo-entrance" src="/img/tempo-icon.png" alt="" />
+            <h1 className="header-title">My Weekly Plan</h1>
+          </div>
           <img className="header-logo" src="/img/tempo2.png" alt="My Weekly Plan" />
           <div className="account-row">
             <span className="account-email">{userEmail || 'Signed in'}</span>
@@ -1059,9 +1109,12 @@ function App() {
         </section>
       </section>
 
-      <section className="sticky-planning-bar">
+      <section className="sticky-planning-bar" ref={stickyPlanningBarRef}>
         <div className="top-controls">
           <div className="week-nav-row">
+            <span className="week-nav-owl-wrap" aria-hidden="true">
+              <img className="week-nav-owl" src="/img/tempo-icon.png" alt="" />
+            </span>
             <button className="icon-text-button" aria-label="Previous week" onClick={() => void changeSelectedWeek(addWeeks(weekKey, -1))}>
               <ChevronLeft size={15} />
             </button>
@@ -1075,6 +1128,9 @@ function App() {
             </button>
           </div>
           <div className="mobile-day-nav-inline">
+            <span className="mobile-nav-owl-wrap" aria-hidden="true">
+              <img className="mobile-nav-owl" src="/img/tempo-icon.png" alt="" />
+            </span>
             <button
               className="icon-text-button"
               aria-label="Previous day"
@@ -1082,7 +1138,7 @@ function App() {
             >
               <ChevronLeft size={15} />
             </button>
-            <strong>{DAY_NAMES[mobileDay]}</strong>
+            <strong>{MOBILE_DAY_NAMES[mobileDay]}</strong>
             <button
               className="icon-text-button"
               aria-label="Next day"
@@ -1172,7 +1228,7 @@ function App() {
             </button>
           </div>
 
-          <div className="backlog-scroll">
+          <div className="backlog-scroll" onWheel={handleBacklogWheel}>
             <div className="task-stack">
               {backlogTasks.map((task, index) => (
                 <div key={task.id} data-backlog-index={index}>
