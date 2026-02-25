@@ -5,6 +5,7 @@ import { type Task } from '../types';
 type TaskCardProps = {
   task: Task;
   compact?: boolean;
+  showDuration?: boolean;
   resizable?: boolean;
   onToggleComplete: () => void;
   onOpenDetails: () => void;
@@ -31,6 +32,7 @@ function statusClass(status: Task['status']) {
 export function TaskCard({
   task,
   compact,
+  showDuration = true,
   resizable,
   onToggleComplete,
   onOpenDetails,
@@ -79,7 +81,7 @@ export function TaskCard({
       </div>
 
       <div
-        className="drag-handle"
+        className={`drag-handle ${showDuration ? '' : 'no-duration'}`}
         role="button"
         tabIndex={0}
         aria-label={`Drag ${task.title}`}
@@ -89,7 +91,7 @@ export function TaskCard({
         }}
         onClick={(event) => event.stopPropagation()}
       >
-        <span className="drag-duration-pill">{durationLabel(task.duration)}</span>
+        {showDuration && <span className="drag-duration-pill">{durationLabel(task.duration)}</span>}
         <span className="drag-grip" aria-hidden="true">
           <GripVertical size={16} strokeWidth={2.2} />
         </span>

@@ -2,7 +2,6 @@ import {
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
-  type WheelEvent as ReactWheelEvent,
   useEffect,
   useMemo,
   useRef,
@@ -52,8 +51,9 @@ import {
 
 type DropTarget = { dayIndex: number; slot: number } | null;
 type AuthMode = 'sign-in' | 'sign-up';
-const SCHEDULED_CARD_TOP_OFFSET = 3;
-const SCHEDULED_CARD_BOTTOM_GAP = 5;
+const SCHEDULED_CARD_TOP_OFFSET = 1;
+const SCHEDULED_CARD_BOTTOM_GAP = 2;
+const SCHEDULED_CARD_SIDE_INSET = 2;
 type KanbanDropTarget = { status: TaskStatus; insertIndex: number } | null;
 type FloatingDayPill = { dayIndex: number; left: number };
 const MOBILE_DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
@@ -723,14 +723,6 @@ function App() {
     }
   }
 
-  function handleBacklogWheel(event: ReactWheelEvent<HTMLDivElement>) {
-    if (viewMode !== 'plan') return;
-    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 1120px)').matches) return;
-    if (headerCollapsed) return;
-    event.preventDefault();
-    window.scrollBy({ top: event.deltaY, left: 0, behavior: 'auto' });
-  }
-
   async function scheduleTaskAtSlot(taskId: string, dayIndex: number, slot: number) {
     const shiftPlan = buildStableShiftPlan(taskId, dayIndex, slot);
     if (shiftPlan) {
@@ -1084,7 +1076,7 @@ function App() {
       <section className="header-hero" ref={headerHeroRef}>
         <header className="top-bar">
           <div className="header-brand" aria-hidden="true">
-            <img className="header-title-icon logo-entrance" src="/img/tempo-icon.png" alt="" />
+            <img className="header-title-icon" src="/img/tempo-icon.png" alt="" />
             <h1 className="header-title">My Weekly Plan</h1>
           </div>
           <img className="header-logo" src="/img/tempo2.png" alt="My Weekly Plan" />
@@ -1228,7 +1220,7 @@ function App() {
             </button>
           </div>
 
-          <div className="backlog-scroll" onWheel={handleBacklogWheel}>
+          <div className={`backlog-scroll ${viewMode === 'plan' && !headerCollapsed ? 'locked' : ''}`}>
             <div className="task-stack">
               {backlogTasks.map((task, index) => (
                 <div key={task.id} data-backlog-index={index}>
@@ -1387,6 +1379,7 @@ function App() {
                         const top = (task.scheduled?.slot ?? 0) * SLOT_HEIGHT + SCHEDULED_CARD_TOP_OFFSET;
                         const renderedDuration =
                           resizingTaskId === task.id && resizePreviewDuration ? resizePreviewDuration : task.duration;
+                        const isSingleSlot = durationToSlots(renderedDuration) === 1;
                         const height =
                           durationToSlots(renderedDuration) * SLOT_HEIGHT -
                           (SCHEDULED_CARD_TOP_OFFSET + SCHEDULED_CARD_BOTTOM_GAP);
@@ -1394,12 +1387,13 @@ function App() {
                         return (
                           <div
                             key={task.id}
-                            className={`scheduled-task ${hasPreviewShift ? 'preview-source' : ''}`}
-                            style={{ top, height }}
+                            className={`scheduled-task ${isSingleSlot ? 'single-slot' : ''} ${hasPreviewShift ? 'preview-source' : ''}`}
+                            style={{ top, height, left: SCHEDULED_CARD_SIDE_INSET, right: SCHEDULED_CARD_SIDE_INSET }}
                           >
                             <TaskCard
                               task={task}
                               compact
+                              showDuration={false}
                               onOpenDetails={() => setTaskInModal(task.id)}
                               onToggleComplete={() =>
                                 void patchTask(task.id, {
@@ -1426,7 +1420,7 @@ function App() {
                           <div
                             key={`preview-${patch.taskId}-${patch.slot}`}
                             className={`scheduled-preview ${patch.taskId === draggingTaskId ? 'moving' : 'shifted'}`}
-                            style={{ top, height }}
+                            style={{ top, height, left: SCHEDULED_CARD_SIDE_INSET, right: SCHEDULED_CARD_SIDE_INSET }}
                           >
                             {task.title}
                           </div>

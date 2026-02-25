@@ -599,6 +599,10 @@ textarea {
   -ms-overflow-style: none;
 }
 
+.backlog-scroll.locked {
+  overflow: hidden;
+}
+
 .backlog-scroll::-webkit-scrollbar {
   display: none;
 }
@@ -607,7 +611,7 @@ textarea {
   display: grid;
   grid-template-columns: 1fr 35px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-md);
+  border-radius: calc(var(--radius-sm) - 2px);
   background: #fff;
   overflow: hidden;
   min-height: 66px;
@@ -659,6 +663,7 @@ textarea {
 
 .task-check {
   margin-top: 2px;
+  margin-left: 0;
 }
 
 .task-content {
@@ -761,17 +766,21 @@ textarea {
 .drag-grip {
   position: absolute;
   left: 50%;
-  top: calc(50% + 11px);
+  top: calc(50% + 15px);
   transform: translate(-50%, -50%);
   font-size: 0.95rem;
 }
 
+.drag-handle.no-duration .drag-grip {
+  top: 50%;
+}
+
 .resize-handle {
   position: absolute;
-  left: 0;
+  left: 44px;
   right: 35px;
   bottom: 0;
-  height: 9px;
+  height: 4px;
   cursor: ns-resize;
   background: linear-gradient(to top, rgba(255, 255, 255, 0.08), transparent);
 }
@@ -981,8 +990,6 @@ textarea {
 
 .scheduled-task {
   position: absolute;
-  left: 4px;
-  right: 4px;
   animation: fadeIn 170ms ease;
 }
 
@@ -994,10 +1001,70 @@ textarea {
   height: 100%;
 }
 
+.scheduled-task .task-body {
+  grid-template-columns: 16px 1fr;
+  gap: 6px;
+  padding: 5px 6px 5px 4px;
+}
+
+.scheduled-task .task-check {
+  margin-top: 0;
+  margin-left: 0;
+}
+
+.scheduled-task .task-title {
+  font-size: 0.82rem;
+  line-height: 1.15;
+}
+
+.scheduled-task .task-card.compact .task-title {
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+}
+
+.scheduled-task.single-slot .task-body {
+  align-items: center;
+  padding-top: 1px;
+  padding-bottom: 1px;
+}
+
+.scheduled-task.single-slot .task-check {
+  margin-top: 2px;
+  align-self: center;
+}
+
+.scheduled-task.single-slot .task-title {
+  line-height: 1;
+  margin-top: 0;
+}
+
+.scheduled-task.single-slot .task-content {
+  display: flex;
+  align-items: center;
+  min-height: 100%;
+}
+
+.scheduled-task .drag-handle {
+  width: 31px;
+}
+
+.scheduled-task .drag-handle.no-duration {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scheduled-task .drag-handle.no-duration .drag-grip {
+  position: static;
+  transform: translateY(2px);
+}
+
+.scheduled-task .drag-grip {
+  font-size: 0.85rem;
+}
+
 .scheduled-preview {
   position: absolute;
-  left: 4px;
-  right: 4px;
   pointer-events: none;
   border: 2px dashed rgba(87, 112, 141, 0.75);
   background: rgba(236, 245, 255, 0.78);

@@ -44,7 +44,7 @@ export const DURATIONS: Duration[] = Array.from({ length: 16 }, (_, index) => (i
 export const START_HOUR = 5;
 export const END_HOUR = 24;
 export const SLOT_MINUTES = 15;
-export const SLOT_HEIGHT = 38;
+export const SLOT_HEIGHT = 23;
 export const TOTAL_SLOTS = ((END_HOUR - START_HOUR) * 60) / SLOT_MINUTES;
 
 export const uid = () => Math.random().toString(36).slice(2, 11);
