@@ -1065,6 +1065,7 @@ function App() {
               <span>Continue</span>
             </button>
           </div>
+          <p className="login-trust-note">Secure sign-in powered by Google/Facebook + Supabase</p>
           </main>
         </div>
       </div>

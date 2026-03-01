@@ -1295,12 +1295,67 @@ textarea {
 
   .top-controls {
     justify-content: space-between;
-    gap: 8px;
+    gap: 6px;
+    flex-wrap: nowrap;
+    padding-left: 8px;
+    padding-right: 12px;
   }
 
   .mobile-day-nav-inline {
     display: inline-flex;
-    margin-right: 14px;
+    margin-right: 8px;
+    margin-left: -4px;
+    gap: 4px;
+    flex: 1 1 auto;
+    min-width: 0;
+    align-items: center;
+  }
+
+  .mobile-day-nav-inline strong {
+    min-width: 34px;
+    font-size: 0.82rem;
+  }
+
+  .mobile-day-nav-inline button {
+    width: 42px;
+    height: 42px;
+    min-width: 42px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mobile-nav-owl-wrap {
+    width: 0;
+    margin-right: 0;
+    transition: width 300ms cubic-bezier(0.22, 0.61, 0.36, 1), margin-right 300ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+
+  .mobile-nav-owl {
+    width: 64px;
+    height: 64px;
+  }
+
+  .planner-shell.header-collapsed .mobile-nav-owl-wrap {
+    width: 58px;
+    margin-right: 2px;
+  }
+
+  .view-toggle {
+    margin-left: auto;
+    gap: 2px;
+    padding: 2px;
+  }
+
+  .view-toggle-button {
+    width: 42px;
+    height: 42px;
+    min-width: 42px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .header-brand {
@@ -1312,6 +1367,10 @@ textarea {
 
   .header-title {
     font-size: var(--hero-title-size);
+  }
+
+  .header-title-icon {
+    height: calc(var(--hero-title-size) * 2.0);
   }
 
   .layout {
@@ -1372,6 +1431,43 @@ textarea {
   .mobile-slot-picker-backdrop {
     display: block;
   }
+
+  .scheduled-task .task-body {
+    align-items: center;
+    padding-top: 2px;
+    padding-bottom: 2px;
+  }
+
+  .scheduled-task .task-check {
+    margin-top: 0;
+    align-self: center;
+  }
+
+  .scheduled-task .task-content {
+    display: flex;
+    align-items: center;
+    min-height: 100%;
+  }
+
+  .scheduled-task .task-title {
+    margin: 0;
+    line-height: 1.08;
+  }
+
+  .scheduled-task.single-slot .task-card {
+    height: calc(100% + 2px);
+    margin-top: -1px;
+  }
+
+  .scheduled-task.single-slot .task-body {
+    padding-top: 0;
+    padding-bottom: 0;
+    transform: translateY(-2px);
+  }
+
+  .scheduled-task.single-slot .drag-handle.no-duration .drag-grip {
+    transform: translateY(0);
+  }
 }
 
 @media (max-width: 900px) {
@@ -1413,7 +1509,7 @@ textarea {
   }
 
   .header-title-icon {
-    height: calc(var(--hero-title-size) * 1.55);
+    height: calc(var(--hero-title-size) * 1.92);
     margin-left: -8px;
   }
 }
@@ -1439,7 +1535,7 @@ textarea {
   }
 
   .header-title-icon {
-    height: calc(var(--hero-title-size) * 1.45);
+    height: calc(var(--hero-title-size) * 1.82);
     margin-left: -10px;
   }
 }
@@ -1526,6 +1622,14 @@ textarea {
 
 .oauth-google:hover {
   background: #ececec;
+}
+
+.login-trust-note {
+  margin: 4px 0 0;
+  text-align: center;
+  font-size: 0.74rem;
+  color: var(--muted);
+  opacity: 0.9;
 }
 
 .error-banner {
