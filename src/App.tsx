@@ -1528,7 +1528,10 @@ function App() {
 
         <section className="progress-strip" aria-live="polite">
           <div className="progress-fill" style={{ width: `${completionPct}%` }} />
-          <p>
+          <p className="progress-text progress-text-muted">
+            <strong>{completedCount} / {weekTasks.length} ({completionPct}%)</strong> done this week
+          </p>
+          <p className="progress-text progress-text-fill" aria-hidden="true" style={{ width: `${completionPct}%` }}>
             <strong>{completedCount} / {weekTasks.length} ({completionPct}%)</strong> done this week
           </p>
         </section>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, ChevronUp, Link2, Paperclip, Trash2, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, Link2, Paperclip, Plus, Trash2, X } from 'lucide-react';
 import { toLocalDateKey, weekStartMonday } from '../lib/dateTime';
 import {
   DAY_NAMES,
@@ -91,6 +91,10 @@ export function TaskModal({ task, onClose, onSave, onDelete }: TaskModalProps) {
     }
     didFocusTitleRef.current = true;
   }, [shouldSelectDefaultTitle]);
+
+  useEffect(() => {
+    setRepeatExpanded(false);
+  }, [task.id]);
 
   function removeLink(index: number) {
     setDraft({ ...draft, links: draft.links.filter((_, i) => i !== index) });
@@ -232,6 +236,7 @@ export function TaskModal({ task, onClose, onSave, onDelete }: TaskModalProps) {
           </button>
         </header>
 
+        <div className="task-modal-body">
         <label>
           Title
           <input
@@ -332,6 +337,7 @@ export function TaskModal({ task, onClose, onSave, onDelete }: TaskModalProps) {
                 onChange={(event) => {
                   const next = event.target.checked;
                   setRepeatEnabled(next);
+                  setRepeatExpanded(next);
                   if (!next) return;
                   if (repeatDays.length > 0) return;
                   if (task.scheduled) {
@@ -456,7 +462,7 @@ export function TaskModal({ task, onClose, onSave, onDelete }: TaskModalProps) {
           <div className="stack">
             {draft.links.length === 0 && <p className="muted">No links yet.</p>}
             {draft.links.map((link, index) => (
-              <div key={index} className="inline-row">
+              <div key={index} className="inline-row link-row">
                 <a href={link} target="_blank" rel="noreferrer">
                   {link}
                 </a>
@@ -477,24 +483,14 @@ export function TaskModal({ task, onClose, onSave, onDelete }: TaskModalProps) {
                   }
                 }}
               />
-              <div className="link-entry-actions">
-                <button
-                  className="link-icon-button"
-                  aria-label="Confirm link"
-                  disabled={!pendingLink.trim()}
-                  onClick={confirmPendingLink}
-                >
-                  <Check size={14} />
-                </button>
-                <button
-                  className="link-icon-button"
-                  aria-label="Clear link input"
-                  disabled={!pendingLink}
-                  onClick={() => setPendingLink('')}
-                >
-                  <X size={14} />
-                </button>
-              </div>
+              <button
+                className="link-icon-button"
+                aria-label="Add link"
+                disabled={!pendingLink.trim()}
+                onClick={confirmPendingLink}
+              >
+                <Plus size={14} />
+              </button>
             </div>
           </div>
         </section>
@@ -531,6 +527,7 @@ export function TaskModal({ task, onClose, onSave, onDelete }: TaskModalProps) {
             }}
           />
         </section>
+        </div>
 
         <footer className="task-modal-footer">
           <button className="danger icon-text-button" onClick={onDelete}>
