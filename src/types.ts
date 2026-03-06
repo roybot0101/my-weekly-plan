@@ -18,6 +18,15 @@ export type TaskSchedule = {
   timezone: string;
 };
 
+export type TaskRepeat = {
+  enabled: boolean;
+  days: number[];
+  slot: number;
+  sameTimeEveryDay?: boolean;
+  daySlots?: Partial<Record<number, number>>;
+  timezone: string;
+};
+
 export type Task = {
   id: string;
   title: string;
@@ -31,6 +40,8 @@ export type Task = {
   attachments: Attachment[];
   status: TaskStatus;
   scheduled?: TaskSchedule;
+  repeat?: TaskRepeat;
+  repeatParentId?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -39,12 +50,12 @@ export const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'
 
 export const STATUS_ORDER: TaskStatus[] = ['Not Started', 'In Progress', 'Blocked', 'In Review', 'Done'];
 
-export const DURATIONS: Duration[] = Array.from({ length: 16 }, (_, index) => (index + 1) * 15);
+export const DURATIONS: Duration[] = Array.from({ length: 15 }, (_, index) => (index + 2) * 15);
 
 export const START_HOUR = 5;
 export const END_HOUR = 24;
 export const SLOT_MINUTES = 15;
-export const SLOT_HEIGHT = 23;
+export const SLOT_HEIGHT = 11.5;
 export const TOTAL_SLOTS = ((END_HOUR - START_HOUR) * 60) / SLOT_MINUTES;
 
 export const uid = () => Math.random().toString(36).slice(2, 11);

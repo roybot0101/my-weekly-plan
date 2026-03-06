@@ -1,6 +1,6 @@
 import { nowWeekStartKey } from './dateTime';
 import { supabase } from './supabase';
-import { localTimezone, type Task } from '../types';
+import { localTimezone, type Task, type TaskRepeat } from '../types';
 
 type TaskRow = {
   id: string;
@@ -16,6 +16,8 @@ type TaskRow = {
   attachments: Task['attachments'] | null;
   status: Task['status'];
   scheduled: Task['scheduled'] | null;
+  repeat_config: Task['repeat'] | null;
+  repeat_parent_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -34,6 +36,16 @@ function requireClient() {
   return supabase;
 }
 
+function isMissingRepeatColumns(error: { code?: string; message?: string } | null | undefined) {
+  if (!error) return false;
+  const message = (error.message ?? '').toLowerCase();
+  return (
+    error.code === '42703' ||
+    message.includes('repeat_config') ||
+    message.includes('repeat_parent_id')
+  );
+}
+
 function rowToTask(row: TaskRow): Task {
   return {
     id: row.id,
@@ -48,6 +60,8 @@ function rowToTask(row: TaskRow): Task {
     attachments: row.attachments ?? [],
     status: row.status,
     scheduled: row.scheduled ?? undefined,
+    repeat: row.repeat_config ?? undefined,
+    repeatParentId: row.repeat_parent_id ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -67,6 +81,8 @@ function taskPatchToRowPatch(patch: Partial<Task>) {
   if (patch.attachments !== undefined) rowPatch.attachments = patch.attachments;
   if (patch.status !== undefined) rowPatch.status = patch.status;
   if ('scheduled' in patch) rowPatch.scheduled = patch.scheduled ?? null;
+  if ('repeat' in patch) rowPatch.repeat_config = patch.repeat ?? null;
+  if ('repeatParentId' in patch) rowPatch.repeat_parent_id = patch.repeatParentId ?? null;
 
   return rowPatch;
 }
@@ -258,27 +274,40 @@ export async function createTask(userId: string, title: string): Promise<Task> {
       ? crypto.randomUUID()
       : randomUuidFallback();
 
-  const { data, error } = await client
+  const baseRow = {
+    id,
+    user_id: userId,
+    title,
+    completed: false,
+    duration: 60,
+    due_date: null,
+    urgent: false,
+    important: false,
+    notes: '',
+    links: [],
+    attachments: [],
+    status: 'Not Started',
+    scheduled: null,
+    created_at: now,
+    updated_at: now,
+  };
+
+  let { data, error } = await client
     .from('tasks')
     .insert({
-      id,
-      user_id: userId,
-      title,
-      completed: false,
-      duration: 30,
-      due_date: null,
-      urgent: false,
-      important: false,
-      notes: '',
-      links: [],
-      attachments: [],
-      status: 'Not Started',
-      scheduled: null,
-      created_at: now,
-      updated_at: now,
+      ...baseRow,
+      repeat_config: null,
+      repeat_parent_id: null,
     })
     .select('*')
     .single();
+
+  // Backward-compatible path: allow task creation before repeat columns are migrated.
+  if (error && isMissingRepeatColumns(error)) {
+    const retry = await client.from('tasks').insert(baseRow).select('*').single();
+    data = retry.data;
+    error = retry.error;
+  }
 
   if (error) throw error;
   return rowToTask(data as TaskRow);
@@ -297,6 +326,106 @@ export async function updateTask(userId: string, taskId: string, patch: Partial<
 
   if (error) throw error;
   return rowToTask(data as TaskRow);
+}
+
+export async function createRepeatTemplate(userId: string, source: Task, repeat: TaskRepeat): Promise<Task> {
+  const client = requireClient();
+  const now = new Date().toISOString();
+  const id =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : randomUuidFallback();
+
+  const { data, error } = await client
+    .from('tasks')
+    .insert({
+      id,
+      user_id: userId,
+      title: source.title,
+      completed: false,
+      duration: source.duration,
+      due_date: source.dueDate || null,
+      urgent: source.urgent,
+      important: source.important,
+      notes: source.notes,
+      links: source.links,
+      attachments: source.attachments,
+      status: source.status === 'Done' ? 'Not Started' : source.status,
+      scheduled: null,
+      repeat_config: repeat,
+      repeat_parent_id: null,
+      created_at: now,
+      updated_at: now,
+    })
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return rowToTask(data as TaskRow);
+}
+
+export async function ensureRepeatingTasksForWeek(userId: string, weekKey: string, tasks: Task[]): Promise<Task[]> {
+  const client = requireClient();
+
+  const templates = tasks.filter((task) => task.repeat?.enabled && !task.repeatParentId);
+  if (templates.length === 0) return [];
+
+  const now = new Date().toISOString();
+  const createdRows: TaskRow[] = [];
+
+  for (const template of templates) {
+    const repeat = template.repeat;
+    if (!repeat || !repeat.enabled || repeat.days.length === 0) continue;
+
+    const existingInstances = tasks.filter(
+      (task) => task.repeatParentId === template.id && task.scheduled?.weekKey === weekKey,
+    );
+
+    const targetCount = repeat.days.length;
+    if (existingInstances.length >= targetCount) continue;
+
+    const existingDaySet = new Set(existingInstances.map((task) => task.scheduled?.dayIndex).filter(Number.isFinite));
+    const daysToCreate = repeat.days
+      .filter((day) => day >= 0 && day <= 6)
+      .filter((day) => !existingDaySet.has(day))
+      .slice(0, targetCount - existingInstances.length);
+
+    if (daysToCreate.length === 0) continue;
+
+    const rowsToInsert = daysToCreate.map((day) => {
+      const perDaySlot = repeat.sameTimeEveryDay === false ? repeat.daySlots?.[day] : undefined;
+      const slot = Number.isFinite(perDaySlot as number) ? (perDaySlot as number) : repeat.slot;
+      return {
+        user_id: userId,
+        title: template.title,
+        completed: false,
+        duration: template.duration,
+        due_date: template.dueDate || null,
+        urgent: template.urgent,
+        important: template.important,
+        notes: template.notes,
+        links: template.links,
+        attachments: template.attachments,
+        status: template.status === 'Done' ? 'Not Started' : template.status,
+        scheduled: {
+          weekKey,
+          dayIndex: day,
+          slot,
+          timezone: repeat.timezone || localTimezone(),
+        },
+        repeat_config: null,
+        repeat_parent_id: template.id,
+        created_at: now,
+        updated_at: now,
+      };
+    });
+
+    const { data, error } = await client.from('tasks').insert(rowsToInsert).select('*');
+    if (error) throw error;
+    createdRows.push(...((data ?? []) as TaskRow[]));
+  }
+
+  return createdRows.map(rowToTask);
 }
 
 export async function deleteTask(userId: string, taskId: string) {

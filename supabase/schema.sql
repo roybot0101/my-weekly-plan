@@ -59,3 +59,9 @@ add column if not exists backlog_order text[] not null default '{}';
 
 alter table public.profiles
 add column if not exists kanban_order text[] not null default '{}';
+
+alter table public.tasks
+add column if not exists repeat_config jsonb;
+
+alter table public.tasks
+add column if not exists repeat_parent_id uuid;

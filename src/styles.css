@@ -20,6 +20,8 @@
   --radius-sm: 10px;
   --sticky-planning-height: 92px;
   --sticky-bar-bottom: 92px;
+  --scheduled-card-left-inset: 2px;
+  --scheduled-card-right-inset: 2px;
 }
 
 * {
@@ -242,14 +244,15 @@ textarea {
 }
 
 .planner-shell {
-  padding: 16px;
+  padding: 16px 0;
   min-height: 100vh;
   position: relative;
 }
 
 .header-hero {
-  width: 100vw;
-  margin-left: calc(50% - 50vw);
+  width: 100%;
+  margin-left: 0;
+  margin-right: 0;
   margin-top: -16px;
   padding: 16px 16px 8px;
   margin-bottom: 0;
@@ -279,7 +282,7 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  max-width: calc(100vw - 20px);
+  max-width: calc(100% - 20px);
   min-width: 0;
   overflow: visible;
 }
@@ -362,9 +365,41 @@ textarea {
   padding-bottom: 6px;
 }
 
+@media (min-width: 1121px) {
+  .top-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 12px;
+  }
+
+  .week-nav-row {
+    min-width: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .week-nav-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  .view-toggle {
+    justify-self: end;
+    flex-shrink: 0;
+    margin-left: 0;
+  }
+
+  .account-row {
+    right: 12px;
+    max-width: calc(100% - 24px);
+  }
+}
+
 .sticky-planning-bar {
-  width: 100vw;
-  margin-left: calc(50% - 50vw);
+  width: 100%;
+  margin-left: 0;
+  margin-right: 0;
   position: sticky;
   top: 0;
   z-index: 1300;
@@ -474,9 +509,10 @@ textarea {
 
 .progress-strip {
   position: relative;
-  height: 30px;
-  width: 100vw;
-  margin-left: calc(50% - 50vw);
+  height: 20px;
+  width: 100%;
+  margin-left: 0;
+  margin-right: 0;
   background-color: #f7f3ed;
   background-image: radial-gradient(rgba(122, 106, 88, 0.12) 0.7px, transparent 0.7px);
   background-size: 3px 3px;
@@ -488,8 +524,8 @@ textarea {
 .progress-fill {
   position: absolute;
   inset: 0 auto 0 0;
-  background-color: #d9eadf;
-  background-image: radial-gradient(rgba(89, 120, 101, 0.18) 0.7px, transparent 0.7px);
+  background-color: #7fcf97;
+  background-image: radial-gradient(rgba(34, 102, 57, 0.28) 0.7px, transparent 0.7px);
   background-size: 3px 3px;
   border-radius: 0;
 }
@@ -518,9 +554,21 @@ textarea {
 
 .layout {
   display: grid;
-  grid-template-columns: 320px 1fr;
+  grid-template-columns: 320px minmax(0, 1fr);
   gap: 12px;
   min-height: calc(100vh - 170px);
+  width: 100%;
+  min-width: 0;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+.planner-shell.view-plan .layout {
+  padding-right: 0;
+}
+
+.layout > * {
+  min-width: 0;
 }
 
 .layout.kanban-only {
@@ -564,6 +612,8 @@ textarea {
 
 .backlog-panel h2 {
   margin: 0 0 10px;
+  font-size: 0.97rem;
+  line-height: 1.2;
 }
 
 .new-task-row {
@@ -637,7 +687,7 @@ textarea {
 }
 
 .task-card.status-blocked {
-  background: #fdeceb;
+  background: #eaf4ff;
 }
 
 .task-card.status-in-review {
@@ -694,6 +744,25 @@ textarea {
   text-decoration: line-through;
 }
 
+.task-indicators {
+  margin-top: 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.task-indicators span {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  background: #f8f4ef;
+}
+
 .task-title-input {
   padding: 4px 7px;
 }
@@ -724,6 +793,28 @@ textarea {
   color: #49605a;
   border-color: #adc1b6;
   background: #edf5f0;
+}
+
+.task-meta .flag.schedule {
+  color: #4d6a62;
+  border-color: #adc1b6;
+  background: #edf5f0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.task-meta .flag.due-soon {
+  color: #a85a3f;
+  border-color: #d9ad9b;
+  background: #fbeee8;
+}
+
+.task-meta .meta-icon-pill {
+  padding: 2px 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .drag-handle {
@@ -828,7 +919,7 @@ textarea {
 }
 
 .kanban-column .task-card.compact {
-  height: 58px;
+  height: auto;
   min-height: 58px;
 }
 
@@ -839,15 +930,17 @@ textarea {
 .timeline-area {
   position: relative;
   min-width: 0;
+  overflow-x: hidden;
 }
 
 .day-pill-layer {
-  position: sticky;
+  position: fixed;
+  left: var(--timeline-pill-layer-left, 0px);
+  width: var(--timeline-pill-layer-width, 100%);
   top: calc(var(--sticky-bar-bottom) + 6px);
   height: 30px;
-  margin-bottom: -30px;
   overflow: hidden;
-  z-index: 12;
+  z-index: 1312;
   pointer-events: none;
 }
 
@@ -863,6 +956,12 @@ textarea {
   font-weight: 700;
   color: #615749;
   box-shadow: 0 4px 10px rgba(66, 56, 44, 0.12);
+}
+
+.day-scroll-pill.today {
+  background: #eaf7ee;
+  border-color: #adcbb8;
+  color: #2f6b4a;
 }
 
 .mobile-day-nav-inline {
@@ -901,6 +1000,8 @@ textarea {
   gap: 8px;
   overflow: auto;
   padding-bottom: 3px;
+  width: 100%;
+  max-width: 100%;
 }
 
 .time-axis-column {
@@ -972,7 +1073,7 @@ textarea {
 
 .time-slot {
   position: relative;
-  border-bottom: 1px solid #e9e0d4;
+  border-bottom: 1px dotted #f1ece4;
 }
 
 .time-slot.band-a {
@@ -984,8 +1085,12 @@ textarea {
 }
 
 .time-slot.drop-target {
-  box-shadow: inset 0 0 0 2px rgba(123, 151, 133, 0.78);
-  background: #ecf5ef;
+  box-shadow: none;
+  background: transparent;
+}
+
+.mobile-hour-label {
+  display: none;
 }
 
 .scheduled-task {
@@ -1044,6 +1149,28 @@ textarea {
   min-height: 100%;
 }
 
+.scheduled-task.half-hour-slot .task-body {
+  align-items: center;
+  padding-top: 1px;
+  padding-bottom: 1px;
+}
+
+.scheduled-task.half-hour-slot .task-check {
+  margin-top: 1px;
+  align-self: center;
+}
+
+.scheduled-task.half-hour-slot .task-content {
+  display: flex;
+  align-items: center;
+  min-height: 100%;
+}
+
+.scheduled-task.half-hour-slot .task-title {
+  line-height: 1.05;
+  margin-top: 0;
+}
+
 .scheduled-task .drag-handle {
   width: 31px;
 }
@@ -1059,6 +1186,10 @@ textarea {
   transform: translateY(2px);
 }
 
+.scheduled-task.half-hour-slot .drag-handle.no-duration .drag-grip {
+  transform: translateY(3px);
+}
+
 .scheduled-task .drag-grip {
   font-size: 0.85rem;
 }
@@ -1069,9 +1200,11 @@ textarea {
   border: 2px dashed rgba(87, 112, 141, 0.75);
   background: rgba(236, 245, 255, 0.78);
   border-radius: var(--radius-md);
-  padding: 8px 10px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
   font-size: 0.82rem;
-  line-height: 1.2;
+  line-height: 1.1;
   color: #3b4f64;
   z-index: 4;
   overflow: hidden;
@@ -1123,10 +1256,46 @@ textarea {
   gap: 8px;
 }
 
+.schedule-row {
+  align-items: center;
+}
+
+.schedule-row input[type='date'] {
+  flex: 1 1 auto;
+}
+
+.schedule-row input[type='time'] {
+  width: 112px;
+  flex: 0 0 auto;
+}
+
+.due-flags-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-items: end;
+}
+
+.due-date-field {
+  min-width: 0;
+}
+
+.due-flags-inline {
+  margin-bottom: 4px;
+  grid-template-columns: auto auto;
+  justify-self: start;
+}
+
+.due-flags-inline label {
+  white-space: nowrap;
+}
+
 .section-title-icon {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  font-size: 0.92rem;
+  font-weight: 400;
 }
 
 .modal-grid-2 {
@@ -1150,6 +1319,151 @@ textarea {
   border-radius: var(--radius-sm);
   padding: 8px;
   background: #fff;
+}
+
+.repeat-check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.repeat-check-row input {
+  width: auto;
+  margin: 0;
+}
+
+.repeat-check-row label {
+  display: inline;
+  gap: 0;
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.repeat-collapse-toggle {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  padding: 0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.repeat-days-grid {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.repeat-day-chip {
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #fff;
+  padding: 4px 0;
+  width: 56px;
+  min-width: 56px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.repeat-day-chip.active {
+  background: #3d78d8;
+  border-color: #2f66c2;
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.link-like-button {
+  border: none;
+  background: transparent;
+  color: #6d6457;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  justify-self: start;
+}
+
+.link-like-button:hover {
+  transform: none;
+  border: none;
+  color: #5c5448;
+}
+
+.repeat-time-field {
+  max-width: 220px;
+}
+
+.repeat-time-field input,
+.repeat-time-row input {
+  width: 100%;
+  max-width: 220px;
+}
+
+.repeat-day-times {
+  display: grid;
+  gap: 6px;
+}
+
+.repeat-time-row {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.repeat-section {
+  display: grid;
+  gap: 8px;
+}
+
+.schedule-repeat-head {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-items: end;
+}
+
+.schedule-main-field {
+  min-width: 0;
+}
+
+.repeat-head-toggle {
+  justify-self: start;
+  margin-bottom: 2px;
+}
+
+.scope-choice-overlay {
+  background: rgba(54, 47, 40, 0.35);
+}
+
+.scope-choice-modal {
+  width: min(360px, calc(100vw - 32px));
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-panel);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.scope-choice-modal h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.scope-choice-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.scope-choice-actions button {
+  white-space: nowrap;
 }
 
 .stack {
@@ -1218,6 +1532,12 @@ textarea {
   background: #f8ece8;
   border-color: #e2b7aa;
   color: #8f3f2f;
+}
+
+.success {
+  background: #eaf7ee;
+  border-color: #adcbb8;
+  color: #2f6b4a;
 }
 
 @keyframes fadeIn {
@@ -1289,6 +1609,10 @@ textarea {
 }
 
 @media (max-width: 1120px) {
+  :root {
+    --scheduled-card-left-inset: 52px;
+  }
+
   .week-nav-row {
     display: none;
   }
@@ -1362,7 +1686,7 @@ textarea {
     --hero-title-size: 6.6rem;
     left: 10px;
     right: 10px;
-    max-width: calc(100vw - 20px);
+    max-width: calc(100% - 20px);
   }
 
   .header-title {
@@ -1376,6 +1700,11 @@ textarea {
   .layout {
     grid-template-columns: 1fr;
     min-height: unset;
+  }
+
+  .planner-shell.view-plan .layout {
+    padding-left: 0;
+    padding-right: 0;
   }
 
   .planner-shell.view-plan .backlog-panel {
@@ -1400,14 +1729,32 @@ textarea {
     display: flex;
     gap: 0;
     grid-template-columns: none;
-    transform: translateX(calc(var(--mobile-day-index, 0) * -100%));
-    transition: transform 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    transform: translateX(calc(var(--mobile-day-index, 0) * -100% + var(--mobile-swipe-offset, 0px)));
+    transition: transform var(--mobile-swipe-duration, 260ms) cubic-bezier(0.22, 0.61, 0.36, 1);
     will-change: transform;
     overflow: visible;
   }
 
   .time-axis-column {
     display: none;
+  }
+
+  .mobile-hour-label {
+    display: inline-flex;
+    position: absolute;
+    left: 6px;
+    top: 4px;
+    font-size: 0.62rem;
+    color: var(--muted);
+    font-weight: 700;
+    white-space: nowrap;
+    border: 1px solid var(--line);
+    background: #fff;
+    border-radius: 999px;
+    padding: 2px 5px;
+    line-height: 1.1;
+    pointer-events: none;
+    z-index: 1;
   }
 
   .day-column {
@@ -1426,6 +1773,16 @@ textarea {
 
   .modal-grid-2 {
     grid-template-columns: 1fr;
+  }
+
+  .due-flags-row {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .schedule-repeat-head {
+    grid-template-columns: 1fr;
+    align-items: start;
   }
 
   .mobile-slot-picker-backdrop {
