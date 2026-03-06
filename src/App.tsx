@@ -118,12 +118,15 @@ function App() {
   const [mobileSlotPicker, setMobileSlotPicker] = useState<{ dayIndex: number; slot: number } | null>(null);
   const [mobileSlotPickerError, setMobileSlotPickerError] = useState<string | null>(null);
   const [fixedDayPills, setFixedDayPills] = useState<FloatingDayPill[]>([]);
+  const [showViewportTimelineScrollbar, setShowViewportTimelineScrollbar] = useState(false);
+  const [timelineScrollbarContentWidth, setTimelineScrollbarContentWidth] = useState(0);
   const [headerCollapsed, setHeaderCollapsed] = useState(false);
   const [currentTimeMs, setCurrentTimeMs] = useState(() => Date.now());
   const draggingTaskIdRef = useRef<string | null>(null);
   const dayHeaderRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const dayColumnRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const timelineGridRef = useRef<HTMLDivElement | null>(null);
+  const timelineViewportScrollbarRef = useRef<HTMLDivElement | null>(null);
   const timelineAreaRef = useRef<HTMLElement | null>(null);
   const timeAxisRef = useRef<HTMLDivElement | null>(null);
   const mobileSwipeRef = useRef<MobileSwipeGesture | null>(null);
@@ -311,6 +314,7 @@ function App() {
   useEffect(() => {
     if (viewMode !== 'plan') {
       setFixedDayPills([]);
+      setShowViewportTimelineScrollbar(false);
       return;
     }
 
@@ -324,6 +328,22 @@ function App() {
       const timelineWidth = Math.max(0, timelineRect?.width ?? window.innerWidth);
       document.documentElement.style.setProperty('--timeline-pill-layer-left', `${Math.max(0, calendarLeftEdge)}px`);
       document.documentElement.style.setProperty('--timeline-pill-layer-width', `${timelineWidth}px`);
+
+      const timelineGrid = timelineGridRef.current;
+      const isDesktopPlan = !isMobileViewport();
+      if (timelineGrid && isDesktopPlan) {
+        const nextWidth = timelineGrid.scrollWidth;
+        const hasHorizontalOverflow = nextWidth > timelineGrid.clientWidth + 1;
+        setShowViewportTimelineScrollbar((current) => (current === hasHorizontalOverflow ? current : hasHorizontalOverflow));
+        setTimelineScrollbarContentWidth((current) => (current === nextWidth ? current : nextWidth));
+
+        const viewportScrollbar = timelineViewportScrollbarRef.current;
+        if (viewportScrollbar && Math.abs(viewportScrollbar.scrollLeft - timelineGrid.scrollLeft) > 1) {
+          viewportScrollbar.scrollLeft = timelineGrid.scrollLeft;
+        }
+      } else {
+        setShowViewportTimelineScrollbar((current) => (current ? false : current));
+      }
 
       const next: FloatingDayPill[] = [];
       DAY_NAMES.forEach((_, dayIndex) => {
@@ -360,6 +380,32 @@ function App() {
       if (rafId) window.cancelAnimationFrame(rafId);
     };
   }, [viewMode, weekKey, mobileDay]);
+
+  useEffect(() => {
+    if (viewMode !== 'plan' || !showViewportTimelineScrollbar) return;
+    const timelineGrid = timelineGridRef.current;
+    const viewportScrollbar = timelineViewportScrollbarRef.current;
+    if (!timelineGrid || !viewportScrollbar) return;
+
+    const syncFromGrid = () => {
+      if (Math.abs(viewportScrollbar.scrollLeft - timelineGrid.scrollLeft) > 1) {
+        viewportScrollbar.scrollLeft = timelineGrid.scrollLeft;
+      }
+    };
+    const syncFromViewport = () => {
+      if (Math.abs(timelineGrid.scrollLeft - viewportScrollbar.scrollLeft) > 1) {
+        timelineGrid.scrollLeft = viewportScrollbar.scrollLeft;
+      }
+    };
+
+    syncFromGrid();
+    timelineGrid.addEventListener('scroll', syncFromGrid, { passive: true });
+    viewportScrollbar.addEventListener('scroll', syncFromViewport, { passive: true });
+    return () => {
+      timelineGrid.removeEventListener('scroll', syncFromGrid);
+      viewportScrollbar.removeEventListener('scroll', syncFromViewport);
+    };
+  }, [viewMode, showViewportTimelineScrollbar, weekKey]);
 
   useEffect(() => {
     if (!saving) {
@@ -1670,27 +1716,28 @@ function App() {
             })}
           </section>
         ) : (
-          <section
-            className="timeline-area"
-            ref={timelineAreaRef}
-            onTouchStart={handleTimelineTouchStart}
-            onTouchMove={handleTimelineTouchMove}
-            onTouchEnd={handleTimelineTouchEnd}
-            onTouchCancel={handleTimelineTouchEnd}
-          >
-            <div className="day-pill-layer" aria-hidden="true">
-              {fixedDayPills.map((pill) => (
-                <div
-                  key={`fixed-pill-${pill.dayIndex}`}
-                  className={`day-scroll-pill ${weekKey === todayWeekKey && pill.dayIndex === todayDayIndex ? 'today' : ''}`}
-                  style={{ left: pill.left }}
-                >
-                  {DAY_NAMES[pill.dayIndex]}
-                </div>
-              ))}
-            </div>
+          <>
+            <section
+              className="timeline-area"
+              ref={timelineAreaRef}
+              onTouchStart={handleTimelineTouchStart}
+              onTouchMove={handleTimelineTouchMove}
+              onTouchEnd={handleTimelineTouchEnd}
+              onTouchCancel={handleTimelineTouchEnd}
+            >
+              <div className="day-pill-layer" aria-hidden="true">
+                {fixedDayPills.map((pill) => (
+                  <div
+                    key={`fixed-pill-${pill.dayIndex}`}
+                    className={`day-scroll-pill ${weekKey === todayWeekKey && pill.dayIndex === todayDayIndex ? 'today' : ''}`}
+                    style={{ left: pill.left }}
+                  >
+                    {DAY_NAMES[pill.dayIndex]}
+                  </div>
+                ))}
+              </div>
 
-            <div className="timeline-grid" ref={timelineGridRef} style={mobileTimelineStyle}>
+              <div className="timeline-grid" ref={timelineGridRef} style={mobileTimelineStyle}>
               <div className="time-axis-column" aria-hidden="true" ref={timeAxisRef}>
                 <div className="time-axis-header" />
                 <div className="time-axis-track">
@@ -1822,9 +1869,15 @@ function App() {
                   </div>
                 );
               })}
-            </div>
+              </div>
 
-          </section>
+            </section>
+            {showViewportTimelineScrollbar && (
+              <div className="timeline-viewport-scrollbar" ref={timelineViewportScrollbarRef} aria-hidden="true">
+                <div className="timeline-viewport-scrollbar-inner" style={{ width: timelineScrollbarContentWidth }} />
+              </div>
+            )}
+          </>
         )}
       </div>
 

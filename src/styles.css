@@ -394,6 +394,15 @@ textarea {
     right: 12px;
     max-width: calc(100% - 24px);
   }
+
+  .timeline-grid {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .timeline-grid::-webkit-scrollbar {
+    height: 0;
+  }
 }
 
 .sticky-planning-bar {
@@ -945,6 +954,38 @@ textarea {
   position: relative;
   min-width: 0;
   overflow-x: hidden;
+}
+
+.timeline-viewport-scrollbar {
+  position: fixed;
+  left: var(--timeline-pill-layer-left, 0px);
+  width: var(--timeline-pill-layer-width, 100%);
+  bottom: 3px;
+  height: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  z-index: 1320;
+  scrollbar-color: #b1a083 #ebe2d6;
+  scrollbar-width: thin;
+}
+
+.timeline-viewport-scrollbar::-webkit-scrollbar {
+  height: 12px;
+}
+
+.timeline-viewport-scrollbar::-webkit-scrollbar-track {
+  background: #ebe2d6;
+  border-radius: 999px;
+}
+
+.timeline-viewport-scrollbar::-webkit-scrollbar-thumb {
+  background: #b1a083;
+  border-radius: 999px;
+  border: 2px solid #ebe2d6;
+}
+
+.timeline-viewport-scrollbar-inner {
+  height: 1px;
 }
 
 .day-pill-layer {
@@ -1827,6 +1868,10 @@ textarea {
 
   .timeline-area {
     overflow: hidden;
+  }
+
+  .timeline-viewport-scrollbar {
+    display: none;
   }
 
   .modal-grid-2 {
