@@ -48,7 +48,7 @@ export type Task = {
 
 export const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
-export const STATUS_ORDER: TaskStatus[] = ['Not Started', 'In Progress', 'Blocked', 'In Review', 'Done'];
+export const STATUS_ORDER: TaskStatus[] = ['Not Started', 'Blocked', 'In Progress', 'In Review', 'Done'];
 
 export const DURATIONS: Duration[] = Array.from({ length: 15 }, (_, index) => (index + 2) * 15);
 

@@ -273,7 +273,7 @@ textarea {
 }
 
 .header-brand {
-  --hero-title-size: clamp(2.8rem, 8vw, 8.7rem);
+  --hero-title-size: clamp(1.4rem, 4vw, 4.35rem);
   position: absolute;
   left: 10px;
   right: 10px;
@@ -682,7 +682,7 @@ textarea {
 
 .task-card {
   display: grid;
-  grid-template-columns: 1fr 35px;
+  grid-template-columns: minmax(0, 1fr) 35px;
   border: 1px solid var(--line);
   border-radius: calc(var(--radius-sm) - 2px);
   background: #fff;
@@ -710,7 +710,7 @@ textarea {
 }
 
 .task-card.status-blocked {
-  background: #eaf4ff;
+  background: #fff0df;
 }
 
 .task-card.status-in-review {
@@ -732,6 +732,8 @@ textarea {
   align-items: start;
   padding: 9px;
   cursor: pointer;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .task-check {
@@ -1168,7 +1170,7 @@ textarea {
 }
 
 .scheduled-task .task-check {
-  margin-top: 0;
+  margin-top: 1px;
   margin-left: 0;
 }
 
@@ -1177,20 +1179,58 @@ textarea {
   line-height: 1.15;
 }
 
+.scheduled-task .task-content {
+  display: grid;
+  align-content: start;
+  min-height: 100%;
+  overflow: hidden;
+  padding-top: 2px;
+}
+
 .scheduled-task .task-card.compact .task-title {
   -webkit-line-clamp: 1;
   line-clamp: 1;
 }
 
+.scheduled-task .task-indicators {
+  margin-top: 4px;
+  gap: 3px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.scheduled-task .task-indicators span {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.scheduled-task .task-meta {
+  margin-top: 4px;
+  gap: 3px;
+  font-size: 0.64rem;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.scheduled-task .task-meta span {
+  padding: 1px 5px;
+  flex: 0 0 auto;
+}
+
+.scheduled-task .task-meta .meta-icon-pill {
+  padding: 1px 5px;
+}
+
 .scheduled-task.single-slot .task-body {
-  align-items: center;
+  align-items: start;
   padding-top: 1px;
   padding-bottom: 1px;
 }
 
 .scheduled-task.single-slot .task-check {
-  margin-top: 2px;
-  align-self: center;
+  margin-top: 1px;
+  align-self: start;
 }
 
 .scheduled-task.single-slot .task-title {
@@ -1199,25 +1239,21 @@ textarea {
 }
 
 .scheduled-task.single-slot .task-content {
-  display: flex;
-  align-items: center;
   min-height: 100%;
 }
 
 .scheduled-task.half-hour-slot .task-body {
-  align-items: center;
+  align-items: start;
   padding-top: 1px;
   padding-bottom: 1px;
 }
 
 .scheduled-task.half-hour-slot .task-check {
   margin-top: 1px;
-  align-self: center;
+  align-self: start;
 }
 
 .scheduled-task.half-hour-slot .task-content {
-  display: flex;
-  align-items: center;
   min-height: 100%;
 }
 
@@ -1238,11 +1274,11 @@ textarea {
 
 .scheduled-task .drag-handle.no-duration .drag-grip {
   position: static;
-  transform: translateY(2px);
+  transform: translateY(1px);
 }
 
 .scheduled-task.half-hour-slot .drag-handle.no-duration .drag-grip {
-  transform: translateY(3px);
+  transform: translateY(2px);
 }
 
 .scheduled-task .drag-grip {
@@ -1782,7 +1818,7 @@ textarea {
   }
 
   .header-brand {
-    --hero-title-size: 6.6rem;
+    --hero-title-size: 3.3rem;
     left: 10px;
     right: 10px;
     max-width: calc(100% - 20px);
@@ -1893,19 +1929,17 @@ textarea {
   }
 
   .scheduled-task .task-body {
-    align-items: center;
+    align-items: start;
     padding-top: 2px;
     padding-bottom: 2px;
   }
 
   .scheduled-task .task-check {
-    margin-top: 0;
-    align-self: center;
+    margin-top: 1px;
+    align-self: start;
   }
 
   .scheduled-task .task-content {
-    display: flex;
-    align-items: center;
     min-height: 100%;
   }
 
@@ -1940,7 +1974,7 @@ textarea {
   }
 
   .header-brand {
-    --hero-title-size: 5rem;
+    --hero-title-size: 2.5rem;
   }
 
   .header-title {
@@ -1958,7 +1992,7 @@ textarea {
   }
 
   .header-brand {
-    --hero-title-size: 3.1rem;
+    --hero-title-size: 1.55rem;
     left: 4px;
     right: 8px;
     gap: 4px;
@@ -1984,7 +2018,7 @@ textarea {
   }
 
   .header-brand {
-    --hero-title-size: 2.4rem;
+    --hero-title-size: 1.2rem;
     left: 2px;
     right: 6px;
     gap: 2px;

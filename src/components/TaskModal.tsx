@@ -15,19 +15,17 @@ import {
   type TaskStatus,
 } from '../types';
 
-type StatusFieldValue = 'Not Started' | 'In Progress' | 'Waiting' | 'Done';
+type StatusFieldValue = 'Not Started' | 'Waiting' | 'In Progress' | 'In Review' | 'Done';
 
-const STATUS_FIELD_OPTIONS: StatusFieldValue[] = ['Not Started', 'In Progress', 'Waiting', 'Done'];
+const STATUS_FIELD_OPTIONS: StatusFieldValue[] = ['Not Started', 'Waiting', 'In Progress', 'In Review', 'Done'];
 
 function statusToFieldValue(status: TaskStatus): StatusFieldValue {
-  if (status === 'Blocked' || status === 'In Review') return 'Waiting';
+  if (status === 'Blocked') return 'Waiting';
   return status;
 }
 
-function fieldValueToStatus(value: StatusFieldValue, currentStatus: TaskStatus): TaskStatus {
-  if (value === 'Waiting') {
-    return currentStatus === 'In Review' ? 'In Review' : 'Blocked';
-  }
+function fieldValueToStatus(value: StatusFieldValue): TaskStatus {
+  if (value === 'Waiting') return 'Blocked';
   return value;
 }
 
@@ -254,7 +252,7 @@ export function TaskModal({ task, onClose, onSave, onDelete }: TaskModalProps) {
               value={statusFieldValue}
               onChange={(event) => {
                 const fieldValue = event.target.value as StatusFieldValue;
-                const status = fieldValueToStatus(fieldValue, draft.status);
+                const status = fieldValueToStatus(fieldValue);
                 setDraft({ ...draft, status, completed: status === 'Done' });
               }}
             >
@@ -509,9 +507,12 @@ export function TaskModal({ task, onClose, onSave, onDelete }: TaskModalProps) {
                 <a href={attachment.dataUrl} download={attachment.name}>
                   {attachment.name}
                 </a>
-                <button className="icon-text-button" onClick={() => removeAttachment(attachment.id)}>
+                <button
+                  className="link-icon-button"
+                  aria-label="Remove attachment"
+                  onClick={() => removeAttachment(attachment.id)}
+                >
                   <X size={14} />
-                  <span>Remove</span>
                 </button>
               </div>
             ))}

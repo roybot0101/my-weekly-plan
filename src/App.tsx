@@ -44,6 +44,7 @@ import {
   DAY_NAMES,
   SLOT_HEIGHT,
   SLOT_MINUTES,
+  STATUS_ORDER,
   TOTAL_SLOTS,
   type Duration,
   type Task,
@@ -67,15 +68,27 @@ type MobileSwipeGesture = {
 };
 const MOBILE_DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 const KANBAN_DAY_NAMES = ['Mon', 'Tues', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
+const RESIZE_STEP_SLOTS = 2;
+const RESIZE_STEP_MINUTES = SLOT_MINUTES * RESIZE_STEP_SLOTS;
 const KANBAN_COLUMNS: Array<{ label: string; statuses: TaskStatus[]; dropStatus: TaskStatus }> = [
   { label: 'Not Started', statuses: ['Not Started'], dropStatus: 'Not Started' },
+  { label: 'Waiting', statuses: ['Blocked'], dropStatus: 'Blocked' },
   { label: 'In Progress', statuses: ['In Progress'], dropStatus: 'In Progress' },
-  { label: 'Waiting', statuses: ['Blocked', 'In Review'], dropStatus: 'Blocked' },
+  { label: 'In Review', statuses: ['In Review'], dropStatus: 'In Review' },
   { label: 'Done', statuses: ['Done'], dropStatus: 'Done' },
 ];
 
 function isRepeatTemplate(task: Task) {
   return Boolean(task.repeat?.enabled && !task.repeatParentId);
+}
+
+function getResizedDuration(startDuration: Duration, deltaPixels: number) {
+  const stepPixels = SLOT_HEIGHT * RESIZE_STEP_SLOTS;
+  const deltaSteps =
+    deltaPixels >= 0 ? Math.floor(deltaPixels / stepPixels) : Math.ceil(deltaPixels / stepPixels);
+  const minDuration = Math.min(startDuration, RESIZE_STEP_MINUTES);
+  const nextDuration = startDuration + deltaSteps * RESIZE_STEP_MINUTES;
+  return Math.max(minDuration, Math.min(240, nextDuration)) as Duration;
 }
 
 function App() {
@@ -153,6 +166,26 @@ function App() {
   function sortTasksByOrder(taskList: Task[], orderedIds: string[]) {
     const rank = new Map(orderedIds.map((id, index) => [id, index]));
     return [...taskList].sort((a, b) => {
+      const aRank = rank.get(a.id);
+      const bRank = rank.get(b.id);
+      if (aRank === undefined && bRank === undefined) return a.createdAt < b.createdAt ? 1 : -1;
+      if (aRank === undefined) return 1;
+      if (bRank === undefined) return -1;
+      return aRank - bRank;
+    });
+  }
+
+  function sortTasksByWeeklySchedule(taskList: Task[], orderedIds: string[]) {
+    const rank = new Map(orderedIds.map((id, index) => [id, index]));
+    return [...taskList].sort((a, b) => {
+      const aDay = a.scheduled?.dayIndex ?? Number.MAX_SAFE_INTEGER;
+      const bDay = b.scheduled?.dayIndex ?? Number.MAX_SAFE_INTEGER;
+      if (aDay !== bDay) return aDay - bDay;
+
+      const aSlot = a.scheduled?.slot ?? Number.MAX_SAFE_INTEGER;
+      const bSlot = b.scheduled?.slot ?? Number.MAX_SAFE_INTEGER;
+      if (aSlot !== bSlot) return aSlot - bSlot;
+
       const aRank = rank.get(a.id);
       const bRank = rank.get(b.id);
       if (aRank === undefined && bRank === undefined) return a.createdAt < b.createdAt ? 1 : -1;
@@ -552,20 +585,14 @@ function App() {
     setResizePreviewDuration(startDuration);
 
     const onMove = (moveEvent: MouseEvent) => {
-      const deltaSlots = Math.round((moveEvent.clientY - startY) / SLOT_HEIGHT);
-      const targetMinutes = startDuration + deltaSlots * SLOT_MINUTES;
-      const snapped = Math.round(targetMinutes / SLOT_MINUTES) * SLOT_MINUTES;
-      const nextDuration = Math.max(SLOT_MINUTES, Math.min(240, snapped)) as Duration;
+      const nextDuration = getResizedDuration(startDuration, moveEvent.clientY - startY);
       setResizePreviewDuration(nextDuration);
     };
 
     const onUp = (upEvent: MouseEvent) => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
-      const deltaSlots = Math.round((upEvent.clientY - startY) / SLOT_HEIGHT);
-      const targetMinutes = startDuration + deltaSlots * SLOT_MINUTES;
-      const snapped = Math.round(targetMinutes / SLOT_MINUTES) * SLOT_MINUTES;
-      const nextDuration = Math.max(SLOT_MINUTES, Math.min(240, snapped)) as Duration;
+      const nextDuration = getResizedDuration(startDuration, upEvent.clientY - startY);
       setResizingTaskId(null);
       setResizePreviewDuration(null);
       if (nextDuration !== startDuration) {
@@ -820,7 +847,6 @@ function App() {
 
   async function reorderKanbanTaskToIndex(dragTaskId: string, status: TaskStatus, insertIndex: number) {
     const isKanbanVisible = (task: Task) => !isRepeatTemplate(task) && task.scheduled?.weekKey === weekKey;
-    const orderedStatuses: TaskStatus[] = ['Not Started', 'In Progress', 'Blocked', 'In Review', 'Done'];
 
     const tasksInTargetStatus = sortTasksByOrder(
       tasks.filter((task) => task.id !== dragTaskId && task.status === status && isKanbanVisible(task)),
@@ -831,7 +857,7 @@ function App() {
     targetIds.splice(safeIndex, 0, dragTaskId);
 
     const nextVisibleKanbanOrder: string[] = [];
-    orderedStatuses.forEach((statusName) => {
+    STATUS_ORDER.forEach((statusName) => {
       if (statusName === status) {
         nextVisibleKanbanOrder.push(...targetIds);
         return;
@@ -1634,7 +1660,8 @@ function App() {
                   <TaskCard
                     task={task}
                     showDuration={false}
-                    showMeta={false}
+                    showMeta
+                    showIndicators
                     onOpenDetails={() => setTaskInModal(task.id)}
                     onToggleComplete={() =>
                       void patchTask(task.id, {
@@ -1657,16 +1684,10 @@ function App() {
         {viewMode === 'kanban' ? (
           <section className="kanban-board">
             {KANBAN_COLUMNS.map((column) => {
-              const orderedTasks = sortTasksByOrder(
+              const tasksInStatus = sortTasksByWeeklySchedule(
                 kanbanVisibleTasks.filter((task) => column.statuses.includes(task.status)),
                 kanbanOrder,
               );
-              const tasksInStatus = [...orderedTasks].sort((a, b) => {
-                const aScheduled = Boolean(a.scheduled);
-                const bScheduled = Boolean(b.scheduled);
-                if (aScheduled === bScheduled) return 0;
-                return aScheduled ? -1 : 1;
-              });
 
               return (
                 <div
@@ -1826,8 +1847,8 @@ function App() {
                               task={task}
                               compact
                               showDuration={false}
-                              showMeta={false}
-                              showIndicators={false}
+                              showMeta
+                              showIndicators
                               onOpenDetails={() => setTaskInModal(task.id)}
                               onToggleComplete={() =>
                                 void patchTask(task.id, {
