@@ -1407,7 +1407,7 @@ function App() {
         <div className="login-stack">
           <div className="login-brand" aria-hidden="true">
             <img className="login-brand-icon logo-entrance" src="/img/tempo-icon.png" alt="" />
-            <h1 className="login-title-script">My Weekly Plan</h1>
+            <h1 className="login-title-script">Plan with Tempo</h1>
           </div>
 
           <main className="login-card">
@@ -1504,9 +1504,9 @@ function App() {
         <header className="top-bar">
           <div className="header-brand" aria-hidden="true">
             <img className="header-title-icon" src="/img/tempo-icon.png" alt="" />
-            <h1 className="header-title">My Weekly Plan</h1>
+            <h1 className="header-title">Plan with Tempo</h1>
           </div>
-          <img className="header-logo" src="/img/tempo2.png" alt="My Weekly Plan" />
+          <img className="header-logo" src="/img/tempo2.png" alt="Plan with Tempo" />
           <div className="account-row">
             <span className="account-email">{userEmail || 'Signed in'}</span>
             <button className="account-link" type="button">Settings</button>

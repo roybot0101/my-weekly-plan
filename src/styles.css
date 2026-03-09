@@ -1818,7 +1818,7 @@ textarea {
   }
 
   .header-brand {
-    --hero-title-size: 3.3rem;
+    --hero-title-size: 6.6rem;
     left: 10px;
     right: 10px;
     max-width: calc(100% - 20px);
@@ -1974,7 +1974,7 @@ textarea {
   }
 
   .header-brand {
-    --hero-title-size: 2.5rem;
+    --hero-title-size: 5rem;
   }
 
   .header-title {
@@ -1992,7 +1992,7 @@ textarea {
   }
 
   .header-brand {
-    --hero-title-size: 1.55rem;
+    --hero-title-size: 3.1rem;
     left: 4px;
     right: 8px;
     gap: 4px;
@@ -2018,7 +2018,7 @@ textarea {
   }
 
   .header-brand {
-    --hero-title-size: 1.2rem;
+    --hero-title-size: 2.4rem;
     left: 2px;
     right: 6px;
     gap: 2px;
