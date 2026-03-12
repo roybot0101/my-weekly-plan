@@ -1,5 +1,5 @@
 import { type MouseEvent, type PointerEvent } from 'react';
-import { CalendarCheck, FileText, FolderClock, FolderHeart, GripVertical, Link2, Paperclip, Repeat2 } from 'lucide-react';
+import { CalendarCheck, FileText, FolderClock, FolderHeart, GripVertical, Link2, Paperclip, Repeat2, Sparkles } from 'lucide-react';
 import { type Task } from '../types';
 
 type TaskCardProps = {
@@ -14,6 +14,7 @@ type TaskCardProps = {
   onToggleComplete: () => void;
   onOpenDetails: () => void;
   onHandlePointerDown: (event: PointerEvent<HTMLDivElement>) => void;
+  onRequestContextMenu?: (event: MouseEvent<HTMLElement>) => void;
   onResizeMouseDown?: (event: MouseEvent<HTMLDivElement>) => void;
   isDragging?: boolean;
 };
@@ -55,6 +56,11 @@ function duePill(dueDate: string) {
   };
 }
 
+function activityClassName(activity: Task['activity']) {
+  if (!activity) return '';
+  return `task-inline-field-${activity.toLocaleLowerCase()}`;
+}
+
 export function TaskCard({
   task,
   compact,
@@ -67,24 +73,30 @@ export function TaskCard({
   onToggleComplete,
   onOpenDetails,
   onHandlePointerDown,
+  onRequestContextMenu,
   onResizeMouseDown,
   isDragging,
 }: TaskCardProps) {
+  const client = task.client.trim();
+  const headingLabel = [client, task.activity, task.title].filter(Boolean).join(' ');
+  const accessibleTaskLabel = headingLabel || 'task';
   const hasNotes = task.notes.trim().length > 0;
   const hasLinks = task.links.length > 0;
   const hasAttachments = task.attachments.length > 0;
   const isRepeating = Boolean(task.repeat?.enabled || task.repeatParentId);
+  const isTempoPlanned = task.planningSource === 'tempo' && Boolean(task.scheduled);
   const due = task.dueDate ? duePill(task.dueDate) : null;
 
   return (
     <article
       className={`task-card ${statusClass(task.status)} ${task.completed ? 'done' : ''} ${compact ? 'compact' : ''} ${isDragging ? 'drag-origin' : ''}`}
+      onContextMenu={onRequestContextMenu}
     >
       <div
         className="task-body"
         role="button"
         tabIndex={0}
-        aria-label={`Open details for ${task.title}`}
+        aria-label={`Open details for ${accessibleTaskLabel}`}
         onClick={onOpenDetails}
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') {
@@ -97,7 +109,7 @@ export function TaskCard({
           className="task-check"
           type="checkbox"
           checked={task.completed}
-          aria-label={`Mark ${task.title} complete`}
+          aria-label={`Mark ${accessibleTaskLabel} complete`}
           onChange={(event) => {
             event.stopPropagation();
             onToggleComplete();
@@ -106,35 +118,25 @@ export function TaskCard({
         />
 
         <div className="task-content">
-          <h4 className="task-title">{task.title}</h4>
-
-          {showIndicators && (hasNotes || hasLinks || hasAttachments || isRepeating) && (
-            <div className="task-indicators" aria-label="Task details indicators">
-              {hasNotes && (
-                <span title="Has notes" aria-label="Has notes">
-                  <FileText size={12} />
-                </span>
-              )}
-              {hasLinks && (
-                <span title="Has links" aria-label="Has links">
-                  <Link2 size={12} />
-                </span>
-              )}
-              {hasAttachments && (
-                <span title="Has attachments" aria-label="Has attachments">
-                  <Paperclip size={12} />
-                </span>
-              )}
-              {isRepeating && (
-                <span title="Repeats" aria-label="Repeats">
-                  <Repeat2 size={12} />
-                </span>
-              )}
-            </div>
-          )}
+          <h4 className="task-title" title={compact && headingLabel ? headingLabel : undefined}>
+            {task.activity && <span className={`task-inline-field ${activityClassName(task.activity)}`}>{task.activity}</span>}
+            {client && (
+              <span className="task-client-inline">
+                {client}
+                {task.title ? ' ' : ''}
+              </span>
+            )}
+            <span className="task-title-text">{task.title}</span>
+          </h4>
 
           {showMeta && (
             <div className="task-meta">
+              {isTempoPlanned && (
+                <span className={`tempo-outcome-badge ${compact ? 'icon-only' : ''}`} title="Scheduled by Tempo" aria-label="Scheduled by Tempo">
+                  <Sparkles size={12} />
+                  {!compact && 'Tempo'}
+                </span>
+              )}
               {scheduleBadge && (
                 <span
                   className="flag schedule"
@@ -162,6 +164,31 @@ export function TaskCard({
               )}
             </div>
           )}
+
+          {showIndicators && (hasNotes || hasLinks || hasAttachments || isRepeating) && (
+            <div className="task-indicators" aria-label="Task details indicators">
+              {hasNotes && (
+                <span title="Has notes" aria-label="Has notes">
+                  <FileText size={12} />
+                </span>
+              )}
+              {hasLinks && (
+                <span title="Has links" aria-label="Has links">
+                  <Link2 size={12} />
+                </span>
+              )}
+              {hasAttachments && (
+                <span title="Has attachments" aria-label="Has attachments">
+                  <Paperclip size={12} />
+                </span>
+              )}
+              {isRepeating && (
+                <span title="Repeats" aria-label="Repeats">
+                  <Repeat2 size={12} />
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -169,7 +196,7 @@ export function TaskCard({
         className={`drag-handle ${showDuration ? '' : 'no-duration'}`}
         role="button"
         tabIndex={0}
-        aria-label={`Drag ${task.title}`}
+        aria-label={`Drag ${accessibleTaskLabel}`}
         onPointerDown={(event) => {
           event.stopPropagation();
           onHandlePointerDown(event);
@@ -186,7 +213,7 @@ export function TaskCard({
           className="resize-handle"
           role="button"
           tabIndex={0}
-          aria-label={`Resize ${task.title}`}
+          aria-label={`Resize ${accessibleTaskLabel}`}
           onMouseDown={(event) => {
             event.stopPropagation();
             onResizeMouseDown(event);

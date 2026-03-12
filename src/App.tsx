@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Calendar, CalendarCheck, CalendarDays, Check, ChevronLeft, ChevronRight, Columns3, Plus } from 'lucide-react';
+import { Calendar, CalendarCheck, CalendarDays, Check, ChevronLeft, ChevronRight, Columns3, Copy, Plus, Sparkles, X } from 'lucide-react';
 import { TaskCard } from './components/TaskCard';
 import { TaskModal } from './components/TaskModal';
 import {
@@ -34,23 +34,30 @@ import {
   signOut,
   signUp,
   signInWithOAuth,
+  changePassword,
+  deleteAccount,
   updateBacklogOrder,
   updateKanbanOrder,
   updateSelectedWeekStart,
   updateTask,
+  updateUserSettings,
 } from './lib/cloudStore';
 import { hasSupabaseEnv } from './lib/supabase';
 import {
   DAY_NAMES,
+  END_HOUR,
   SLOT_HEIGHT,
   SLOT_MINUTES,
+  START_HOUR,
   STATUS_ORDER,
   TOTAL_SLOTS,
+  localTimezone,
   type Duration,
   type Task,
   type TaskRepeat,
   type TaskStatus,
   type ViewMode,
+  type WorkBlock,
 } from './types';
 
 type DropTarget = { dayIndex: number; slot: number } | null;
@@ -59,6 +66,17 @@ const SCHEDULED_CARD_TOP_OFFSET = 1;
 const SCHEDULED_CARD_BOTTOM_GAP = 2;
 type KanbanDropTarget = { status: TaskStatus; insertIndex: number } | null;
 type FloatingDayPill = { dayIndex: number; left: number };
+type TempoScheduleOverlaySegment = { key: string; top: number; height: number };
+type TempoWorkRange = { startSlot: number; endSlot: number; blockType: 'early' | 'daylight' | 'late' | 'general' };
+type TempoPlanNotice = { tone: 'neutral' | 'warning'; text: string };
+type TempoUndoEntry = {
+  taskId: string;
+  previousScheduled?: Task['scheduled'];
+  previousPlanningSource?: Task['planningSource'];
+  plannedWeekKey: string;
+  plannedDayIndex: number;
+  plannedSlot: number;
+};
 type SwipeAxis = 'x' | 'y' | null;
 type MobileSwipeGesture = {
   startX: number;
@@ -70,6 +88,8 @@ const MOBILE_DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as co
 const KANBAN_DAY_NAMES = ['Mon', 'Tues', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 const RESIZE_STEP_SLOTS = 2;
 const RESIZE_STEP_MINUTES = SLOT_MINUTES * RESIZE_STEP_SLOTS;
+const CLIENT_SUGGESTIONS_STORAGE_KEY_PREFIX = 'plan-with-tempo:hidden-client-suggestions:';
+const normalizeClientKey = (value: string) => value.trim().toLocaleLowerCase();
 const KANBAN_COLUMNS: Array<{ label: string; statuses: TaskStatus[]; dropStatus: TaskStatus }> = [
   { label: 'Not Started', statuses: ['Not Started'], dropStatus: 'Not Started' },
   { label: 'Waiting', statuses: ['Blocked'], dropStatus: 'Blocked' },
@@ -77,9 +97,56 @@ const KANBAN_COLUMNS: Array<{ label: string; statuses: TaskStatus[]; dropStatus:
   { label: 'In Review', statuses: ['In Review'], dropStatus: 'In Review' },
   { label: 'Done', statuses: ['Done'], dropStatus: 'Done' },
 ];
+const naturalTitleCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 function isRepeatTemplate(task: Task) {
   return Boolean(task.repeat?.enabled && !task.repeatParentId);
+}
+
+function hasValidRepeatParent(task: Task | undefined, taskById: Map<string, Task>) {
+  if (!task?.repeatParentId) return false;
+  const parent = taskById.get(task.repeatParentId);
+  return Boolean(parent?.repeat);
+}
+
+function compareRepeatPosition(
+  left: Pick<NonNullable<Task['scheduled']>, 'weekKey' | 'dayIndex'>,
+  right: Pick<NonNullable<Task['scheduled']>, 'weekKey' | 'dayIndex'>,
+) {
+  if (left.weekKey !== right.weekKey) return left.weekKey.localeCompare(right.weekKey);
+  return left.dayIndex - right.dayIndex;
+}
+
+function anchorRepeatToScheduled(repeat: TaskRepeat, scheduled: NonNullable<Task['scheduled']>): TaskRepeat {
+  return {
+    ...repeat,
+    startWeekKey: scheduled.weekKey,
+    startDayIndex: scheduled.dayIndex,
+    endWeekKey: undefined,
+    endDayIndex: undefined,
+  };
+}
+
+function endRepeatBeforeScheduled(repeat: TaskRepeat, scheduled: NonNullable<Task['scheduled']>): TaskRepeat {
+  return {
+    ...repeat,
+    endWeekKey: scheduled.weekKey,
+    endDayIndex: scheduled.dayIndex,
+  };
+}
+
+function isSeriesTaskOnOrAfterAnchor(task: Task, anchorTask: Task) {
+  if (task.id === anchorTask.id) return true;
+  if (task.scheduled && anchorTask.scheduled) {
+    if (task.scheduled.weekKey !== anchorTask.scheduled.weekKey) {
+      return task.scheduled.weekKey.localeCompare(anchorTask.scheduled.weekKey) >= 0;
+    }
+    if (task.scheduled.dayIndex !== anchorTask.scheduled.dayIndex) {
+      return task.scheduled.dayIndex >= anchorTask.scheduled.dayIndex;
+    }
+    return task.scheduled.slot >= anchorTask.scheduled.slot;
+  }
+  return task.createdAt >= anchorTask.createdAt;
 }
 
 function getResizedDuration(startDuration: Duration, deltaPixels: number) {
@@ -89,6 +156,249 @@ function getResizedDuration(startDuration: Duration, deltaPixels: number) {
   const minDuration = Math.min(startDuration, RESIZE_STEP_MINUTES);
   const nextDuration = startDuration + deltaSteps * RESIZE_STEP_MINUTES;
   return Math.max(minDuration, Math.min(240, nextDuration)) as Duration;
+}
+
+function parseTimeValueToMinutes(value: string) {
+  const [hoursRaw, minutesRaw] = value.split(':').map(Number);
+  const hours = Number.isFinite(hoursRaw) ? hoursRaw : 0;
+  const minutes = Number.isFinite(minutesRaw) ? minutesRaw : 0;
+  return hours * 60 + minutes;
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string' && error.message) {
+    return error.message;
+  }
+  return fallback;
+}
+
+function sortWorkBlocks(blocks: WorkBlock[]) {
+  return [...blocks].sort((a, b) => parseTimeValueToMinutes(a.start) - parseTimeValueToMinutes(b.start));
+}
+
+function getWorkBlockEndMinutes(block: WorkBlock) {
+  return block.end === '00:00' ? 24 * 60 : parseTimeValueToMinutes(block.end);
+}
+
+function isValidTimezone(value: string) {
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function listSupportedTimezones() {
+  const intlWithSupportedValues = Intl as typeof Intl & {
+    supportedValuesOf?: (key: string) => string[];
+  };
+
+  return typeof intlWithSupportedValues.supportedValuesOf === 'function'
+    ? intlWithSupportedValues.supportedValuesOf('timeZone')
+    : [];
+}
+
+function formatWorkBlockTime(value: string) {
+  const [hoursRaw, minutesRaw] = value.split(':').map(Number);
+  const hours = Number.isFinite(hoursRaw) ? hoursRaw : 0;
+  const minutes = Number.isFinite(minutesRaw) ? minutesRaw : 0;
+  const date = new Date(2000, 0, 1, hours, minutes);
+  return new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function parseDateKey(value: string) {
+  if (!value) return null;
+  const parsed = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+}
+
+function differenceInCalendarDays(from: Date, to: Date) {
+  const msPerDay = 1000 * 60 * 60 * 24;
+  return Math.round((to.getTime() - from.getTime()) / msPerDay);
+}
+
+function parseProjectValueAmount(value: string) {
+  const normalized = Number.parseFloat(value.replace(/[^0-9.]/g, ''));
+  return Number.isFinite(normalized) ? normalized : 0;
+}
+
+function getEffectiveDeadline(task: Task) {
+  return task.dueDate || task.projectDeadline || '';
+}
+
+function getTempoProjectFlowRank(activity: Task['activity']) {
+  if (activity === 'Script') return 0;
+  if (activity === 'Prep') return 1;
+  if (activity === 'Shoot') return 2;
+  if (activity === 'Edit') return 3;
+  if (activity === 'Admin') return 4;
+  if (activity === 'Personal') return 5;
+  if (activity === 'Outreach') return 6;
+  return 7;
+}
+
+function getTempoBlockType(startMinutes: number, endMinutes: number): TempoWorkRange['blockType'] {
+  if (startMinutes >= 20 * 60) return 'late';
+  if (endMinutes <= 8 * 60) return 'early';
+  if (startMinutes >= 8 * 60 && endMinutes <= 18 * 60) return 'daylight';
+  return 'general';
+}
+
+function getTempoRangePreference(task: Task, range: TempoWorkRange) {
+  if (task.activity === 'Shoot') {
+    return range.blockType === 'daylight' ? 0 : Number.POSITIVE_INFINITY;
+  }
+
+  if (task.activity === 'Edit') {
+    if (range.blockType === 'late') return 0;
+    if (range.blockType === 'daylight') return 1;
+    if (range.blockType === 'general') return 2;
+    return 3;
+  }
+
+  if (task.activity === 'Script' || task.activity === 'Prep' || task.activity === 'Admin') {
+    if (range.blockType === 'early') return 0;
+    if (range.blockType === 'daylight') return 1;
+    if (range.blockType === 'late') return 2;
+    return 3;
+  }
+
+  if (task.activity === 'Personal') {
+    if (range.blockType === 'daylight') return 0;
+    if (range.blockType === 'early') return 1;
+    if (range.blockType === 'late') return 2;
+    return 3;
+  }
+
+  if (range.blockType === 'daylight') return 0;
+  if (range.blockType === 'early') return 1;
+  if (range.blockType === 'late') return 2;
+  return 3;
+}
+
+function getTempoPriorityScore(task: Task, weekStartKey: string) {
+  let score = 0;
+
+  if (task.urgent) score += 40;
+  if (task.important) score += 30;
+
+  const weekStart = parseDateKey(weekStartKey);
+  const effectiveDeadline = getEffectiveDeadline(task);
+  const deadlineDate = parseDateKey(effectiveDeadline);
+  if (weekStart && deadlineDate) {
+    const daysUntilDeadline = differenceInCalendarDays(weekStart, deadlineDate);
+    if (daysUntilDeadline < 0) {
+      if (task.status !== 'Blocked') score += 85;
+    } else if (daysUntilDeadline <= 1) {
+      score += 60;
+    } else if (daysUntilDeadline <= 3) {
+      score += 40;
+    } else if (daysUntilDeadline <= 7) {
+      score += 25;
+    } else {
+      score += 10;
+    }
+  }
+
+  if (task.activity && task.activity !== 'Admin' && task.activity !== 'Personal') score += 10;
+  if (task.client.trim()) score += 5;
+  if (task.activity === 'Admin') score -= 18;
+  if (task.activity === 'Personal') score -= 24;
+
+  return score;
+}
+
+function getTempoDeadlineSortValue(task: Task) {
+  const deadline = parseDateKey(getEffectiveDeadline(task));
+  return deadline?.getTime() ?? Number.MAX_SAFE_INTEGER;
+}
+
+function getTempoStatusSortValue(status: TaskStatus) {
+  if (status === 'In Progress') return 0;
+  if (status === 'In Review') return 1;
+  if (status === 'Not Started') return 2;
+  if (status === 'Blocked') return 3;
+  return 4;
+}
+
+function getTempoProjectStatusSortValue(tasks: Task[]) {
+  if (tasks.some((task) => task.status === 'In Progress')) return 0;
+  if (tasks.some((task) => task.status === 'Not Started')) return 1;
+  if (tasks.some((task) => task.status === 'In Review')) return 2;
+  if (tasks.some((task) => task.status === 'Blocked')) return 3;
+  return 4;
+}
+
+function getTempoProjectPriorityScore(tasks: Task[], weekStartKey: string) {
+  const earliestDeadline = tasks.reduce<number>((currentEarliest, task) => {
+    const deadline = parseDateKey(getEffectiveDeadline(task));
+    const nextTime = deadline?.getTime() ?? Number.MAX_SAFE_INTEGER;
+    return Math.min(currentEarliest, nextTime);
+  }, Number.MAX_SAFE_INTEGER);
+  const syntheticTask = tasks.reduce<Task>((current, task) => {
+    const effectiveDeadline = getEffectiveDeadline(task);
+    const currentDeadline = getEffectiveDeadline(current);
+    const shouldUseTaskDeadline =
+      Boolean(effectiveDeadline) &&
+      (!currentDeadline || getTempoDeadlineSortValue(task) < getTempoDeadlineSortValue(current));
+
+    return {
+      ...current,
+      urgent: current.urgent || task.urgent,
+      important: current.important || task.important,
+      projectValue:
+        parseProjectValueAmount(task.projectValue) > parseProjectValueAmount(current.projectValue)
+          ? task.projectValue
+          : current.projectValue,
+      dueDate: shouldUseTaskDeadline ? task.dueDate : current.dueDate,
+      projectDeadline: shouldUseTaskDeadline ? task.projectDeadline : current.projectDeadline,
+      activity: current.activity || task.activity,
+      client: current.client || task.client,
+    };
+  }, {
+    ...tasks[0],
+    urgent: false,
+    important: false,
+    dueDate: '',
+    projectDeadline: '',
+    projectValue: '',
+    activity: '',
+    client: tasks[0]?.client ?? '',
+  });
+
+  let score = getTempoPriorityScore(syntheticTask, weekStartKey);
+
+  const oldestCreatedAt = tasks.reduce(
+    (currentOldest, task) => Math.min(currentOldest, new Date(task.createdAt).getTime()),
+    Number.MAX_SAFE_INTEGER,
+  );
+  if (Number.isFinite(oldestCreatedAt)) {
+    const ageInDays = Math.max(0, differenceInCalendarDays(new Date(oldestCreatedAt), new Date()));
+    score += Math.min(18, ageInDays);
+  }
+
+  if (earliestDeadline === Number.MAX_SAFE_INTEGER) {
+    score -= 4;
+  }
+
+  const statusSortValue = getTempoProjectStatusSortValue(tasks);
+  if (statusSortValue === 0) score += 12;
+  if (statusSortValue === 2) score -= 10;
+  if (statusSortValue === 3) score -= 18;
+
+  return score;
+}
+
+function getTempoPlanningStartDay(weekStartKey: string, todayWeekKey: string, todayDayIndex: number) {
+  if (weekStartKey < todayWeekKey) return DAY_NAMES.length;
+  if (weekStartKey === todayWeekKey) return todayDayIndex + 1;
+  return 0;
 }
 
 function App() {
@@ -103,10 +413,23 @@ function App() {
   const [backlogOrder, setBacklogOrder] = useState<string[]>([]);
   const [kanbanOrder, setKanbanOrder] = useState<string[]>([]);
   const [selectedWeekStart, setSelectedWeekStart] = useState(nowWeekStartKey());
+  const [profileTimezone, setProfileTimezone] = useState(localTimezone());
+  const [workBlocks, setWorkBlocks] = useState<WorkBlock[]>([]);
   const [loadingPlanner, setLoadingPlanner] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [tempoPlanning, setTempoPlanning] = useState(false);
+  const [tempoPlanNotice, setTempoPlanNotice] = useState<TempoPlanNotice | null>(null);
+  const [tempoUndoEntries, setTempoUndoEntries] = useState<TempoUndoEntry[]>([]);
   const [savingDotCount, setSavingDotCount] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTimezoneDraft, setSettingsTimezoneDraft] = useState(localTimezone());
+  const [settingsWorkBlocksDraft, setSettingsWorkBlocksDraft] = useState<WorkBlock[]>([]);
+  const [pendingWorkBlockStart, setPendingWorkBlockStart] = useState('');
+  const [pendingWorkBlockEnd, setPendingWorkBlockEnd] = useState('');
+  const [settingsPasswordDraft, setSettingsPasswordDraft] = useState('');
+  const [settingsPasswordConfirmDraft, setSettingsPasswordConfirmDraft] = useState('');
+  const [deleteAccountConfirmDraft, setDeleteAccountConfirmDraft] = useState('');
 
   const [viewMode, setViewMode] = useState<ViewMode>('plan');
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
@@ -135,6 +458,9 @@ function App() {
   const [timelineScrollbarContentWidth, setTimelineScrollbarContentWidth] = useState(0);
   const [headerCollapsed, setHeaderCollapsed] = useState(false);
   const [currentTimeMs, setCurrentTimeMs] = useState(() => Date.now());
+  const [taskContextMenu, setTaskContextMenu] = useState<{ taskId: string; x: number; y: number } | null>(null);
+  const [hiddenClientSuggestions, setHiddenClientSuggestions] = useState<string[]>([]);
+  const [loadedHiddenClientSuggestionsKey, setLoadedHiddenClientSuggestionsKey] = useState<string | null>(null);
   const draggingTaskIdRef = useRef<string | null>(null);
   const dayHeaderRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const dayColumnRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -145,12 +471,24 @@ function App() {
   const mobileSwipeRef = useRef<MobileSwipeGesture | null>(null);
   const headerHeroRef = useRef<HTMLElement | null>(null);
   const stickyPlanningBarRef = useRef<HTMLElement | null>(null);
+  const hiddenClientSuggestionsStorageKey = `${CLIENT_SUGGESTIONS_STORAGE_KEY_PREFIX}${userId ?? 'guest'}`;
 
   const weekKey = selectedWeekStart;
   const now = new Date(currentTimeMs);
   const todayWeekKey = toLocalDateKey(weekStartMonday(now));
   const todayDayIndex = (now.getDay() + 6) % 7;
   const slotsPerHour = 60 / SLOT_MINUTES;
+  const currentTimeLabel = new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(now);
+  const currentTimeLineTop = (() => {
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const plannerStartMinutes = START_HOUR * 60;
+    const plannerEndMinutes = END_HOUR * 60;
+    if (currentMinutes < plannerStartMinutes || currentMinutes > plannerEndMinutes) return null;
+    return ((currentMinutes - plannerStartMinutes) / SLOT_MINUTES) * SLOT_HEIGHT;
+  })();
 
   const taskById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
   const mobileTimelineStyle = useMemo(
@@ -162,6 +500,73 @@ function App() {
       }) as CSSProperties,
     [mobileDay, mobileSwipeDragging, mobileSwipeOffsetPx],
   );
+  const tempoNonWorkSegments = useMemo(() => {
+    if (workBlocks.length === 0) return [];
+
+    const plannerStartMinutes = START_HOUR * 60;
+    const plannerEndMinutes = END_HOUR * 60;
+    const segments: TempoScheduleOverlaySegment[] = [];
+    let cursor = plannerStartMinutes;
+
+    sortWorkBlocks(workBlocks).forEach((block) => {
+      const startMinutes = parseTimeValueToMinutes(block.start);
+      const endMinutes = getWorkBlockEndMinutes(block);
+      const clampedStart = Math.max(startMinutes, plannerStartMinutes);
+      const clampedEnd = Math.min(endMinutes, plannerEndMinutes);
+      if (clampedEnd <= clampedStart) return;
+
+      if (clampedStart > cursor) {
+        segments.push({
+          key: `${cursor}-${clampedStart}`,
+          top: ((cursor - plannerStartMinutes) / SLOT_MINUTES) * SLOT_HEIGHT,
+          height: ((clampedStart - cursor) / SLOT_MINUTES) * SLOT_HEIGHT,
+        });
+      }
+
+      cursor = Math.max(cursor, clampedEnd);
+    });
+
+    if (cursor < plannerEndMinutes) {
+      segments.push({
+        key: `${cursor}-${plannerEndMinutes}`,
+        top: ((cursor - plannerStartMinutes) / SLOT_MINUTES) * SLOT_HEIGHT,
+        height: ((plannerEndMinutes - cursor) / SLOT_MINUTES) * SLOT_HEIGHT,
+      });
+    }
+
+    return segments;
+  }, [workBlocks]);
+  const tempoWorkRangesByDay = useMemo(() => {
+    const plannerStartMinutes = START_HOUR * 60;
+    const plannerEndMinutes = END_HOUR * 60;
+    const rangesByDay = Array.from({ length: DAY_NAMES.length }, () => Array<TempoWorkRange>());
+
+    sortWorkBlocks(workBlocks).forEach((block) => {
+      const startMinutes = Math.max(parseTimeValueToMinutes(block.start), plannerStartMinutes);
+      const endMinutes = Math.min(getWorkBlockEndMinutes(block), plannerEndMinutes);
+      const startSlot = Math.max(0, Math.ceil((startMinutes - plannerStartMinutes) / SLOT_MINUTES));
+      const endSlot = Math.min(TOTAL_SLOTS, Math.floor((endMinutes - plannerStartMinutes) / SLOT_MINUTES));
+      if (endSlot <= startSlot) return;
+      const blockType = getTempoBlockType(startMinutes, endMinutes);
+
+      DAY_NAMES.forEach((_, dayIndex) => {
+        rangesByDay[dayIndex].push({ startSlot, endSlot, blockType });
+      });
+    });
+
+    return rangesByDay.map((ranges) => ranges.sort((a, b) => a.startSlot - b.startSlot));
+  }, [workBlocks]);
+  const supportedTimezones = useMemo(() => {
+    const fallback = [profileTimezone, localTimezone()];
+    const supportedValues = listSupportedTimezones();
+    if (supportedValues.length === 0) {
+      return Array.from(new Set(fallback.filter(Boolean))).sort((a, b) => a.localeCompare(b));
+    }
+
+    return Array.from(new Set([...supportedValues, ...fallback.filter(Boolean)])).sort((a, b) =>
+      a.localeCompare(b),
+    );
+  }, [profileTimezone]);
 
   function sortTasksByOrder(taskList: Task[], orderedIds: string[]) {
     const rank = new Map(orderedIds.map((id, index) => [id, index]));
@@ -199,18 +604,109 @@ function App() {
     const backlog = tasks.filter((task) => !task.scheduled && !isRepeatTemplate(task));
     return sortTasksByOrder(backlog, backlogOrder);
   }, [tasks, backlogOrder]);
+  const tempoPlannableTasks = useMemo(
+    () =>
+      tasks.filter((task) => {
+        if (task.completed || task.status === 'Done') return false;
+        if (task.scheduled) return false;
+        if (task.repeatParentId) return false;
+        if (isRepeatTemplate(task)) return false;
+        if (task.activity === 'Outreach') return false;
+        return task.duration > 0;
+      }),
+    [tasks],
+  );
 
   const weekTasks = useMemo(
     () => tasks.filter((task) => task.scheduled?.weekKey === weekKey && !isRepeatTemplate(task)),
     [tasks, weekKey],
   );
+  const unfinishedWeekTasks = useMemo(
+    () => weekTasks.filter((task) => !task.completed && task.status !== 'Done'),
+    [weekTasks],
+  );
   const kanbanVisibleTasks = useMemo(
     () => tasks.filter((task) => !isRepeatTemplate(task) && task.scheduled?.weekKey === weekKey),
     [tasks, weekKey],
   );
+  const clientSuggestions = useMemo(() => {
+    const hiddenKeys = new Set(hiddenClientSuggestions.map(normalizeClientKey));
+    const seen = new Set<string>();
+    return tasks
+      .map((task) => task.client.trim())
+      .filter(Boolean)
+      .filter((client) => !hiddenKeys.has(normalizeClientKey(client)))
+      .filter((client) => {
+        const key = client.toLocaleLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }, [tasks, hiddenClientSuggestions]);
+  const projectDeadlineByClient = useMemo(() => {
+    const deadlines: Record<string, string> = {};
+    [...tasks]
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .forEach((task) => {
+        const clientKey = normalizeClientKey(task.client);
+        const projectDeadline = task.projectDeadline.trim();
+        if (!clientKey || !projectDeadline || deadlines[clientKey]) return;
+        deadlines[clientKey] = projectDeadline;
+      });
+    return deadlines;
+  }, [tasks]);
+  const projectValueByClient = useMemo(() => {
+    const values: Record<string, string> = {};
+    [...tasks]
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .forEach((task) => {
+        const clientKey = normalizeClientKey(task.client);
+        const projectValue = task.projectValue.trim();
+        if (!clientKey || !projectValue || values[clientKey]) return;
+        values[clientKey] = projectValue;
+      });
+    return values;
+  }, [tasks]);
+  const activeTaskCountByClient = useMemo(() => {
+    const counts: Record<string, number> = {};
+    tasks.forEach((task) => {
+      if (task.completed) return;
+      const clientKey = normalizeClientKey(task.client);
+      if (!clientKey) return;
+      counts[clientKey] = (counts[clientKey] ?? 0) + 1;
+    });
+    return counts;
+  }, [tasks]);
 
   const completedCount = weekTasks.filter((task) => task.completed).length;
   const completionPct = weekTasks.length === 0 ? 0 : Math.round((completedCount / weekTasks.length) * 100);
+  const tempoPlanningStartDay = getTempoPlanningStartDay(weekKey, todayWeekKey, todayDayIndex);
+  const tempoPlanHint = useMemo<TempoPlanNotice>(() => {
+    if (tempoPlanNotice) return tempoPlanNotice;
+    if (tempoPlanningStartDay >= DAY_NAMES.length) {
+      return {
+        tone: 'warning',
+        text: 'Tempo only plans future days, so this week has no schedulable days left.',
+      };
+    }
+    if (workBlocks.length === 0) {
+      return {
+        tone: 'warning',
+        text: 'Add work blocks in Settings before Tempo can place tasks for you.',
+      };
+    }
+    if (tempoPlannableTasks.length === 0) {
+      return {
+        tone: 'neutral',
+        text: 'Nothing unscheduled is waiting for Tempo right now.',
+      };
+    }
+    return {
+      tone: 'neutral',
+      text: 'Tempo fills only future open time inside your saved work blocks and leaves manually placed outreach tasks alone.',
+    };
+  }, [tempoPlanNotice, tempoPlannableTasks.length, tempoPlanningStartDay, workBlocks.length]);
 
   const modalTask = useMemo(() => {
     if (!taskInModal) return undefined;
@@ -221,6 +717,10 @@ function App() {
     if (!parent?.repeat) return selected;
     return { ...selected, repeat: parent.repeat };
   }, [taskInModal, taskById]);
+  const modalTaskHasValidRepeatParent = useMemo(
+    () => hasValidRepeatParent(modalTask, taskById),
+    [modalTask, taskById],
+  );
 
   function isMobileViewport() {
     return typeof window !== 'undefined' && window.matchMedia('(max-width: 1120px)').matches;
@@ -332,6 +832,12 @@ function App() {
       setBacklogOrder(data.backlogOrder);
       setKanbanOrder(data.kanbanOrder);
       setSelectedWeekStart(data.selectedWeekStart);
+      setProfileTimezone(data.timezone);
+      setWorkBlocks(sortWorkBlocks(data.workBlocks));
+      setSettingsTimezoneDraft(data.timezone);
+      setSettingsWorkBlocksDraft(sortWorkBlocks(data.workBlocks));
+      setPendingWorkBlockStart('');
+      setPendingWorkBlockEnd('');
       setErrorMessage(null);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to load planner data.');
@@ -343,6 +849,11 @@ function App() {
   useEffect(() => {
     draggingTaskIdRef.current = draggingTaskId;
   }, [draggingTaskId]);
+
+  useEffect(() => {
+    setTempoPlanNotice(null);
+    setTempoUndoEntries([]);
+  }, [weekKey]);
 
   useEffect(() => {
     if (viewMode !== 'plan') {
@@ -459,6 +970,30 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!taskContextMenu) return;
+
+    const dismiss = (event?: Event) => {
+      const target = event?.target as HTMLElement | null;
+      if (target?.closest('[data-task-context-menu]')) return;
+      setTaskContextMenu(null);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setTaskContextMenu(null);
+    };
+
+    window.addEventListener('pointerdown', dismiss);
+    window.addEventListener('scroll', dismiss, true);
+    window.addEventListener('resize', dismiss);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', dismiss);
+      window.removeEventListener('scroll', dismiss, true);
+      window.removeEventListener('resize', dismiss);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [taskContextMenu]);
+
+  useEffect(() => {
     const updateHeaderCollapsed = () => {
       const hero = headerHeroRef.current;
       const stickyBar = stickyPlanningBarRef.current;
@@ -501,9 +1036,10 @@ function App() {
 
     void bootstrap();
 
-    const unsubscribe = onAuthStateChange(() => {
+    const unsubscribe = onAuthStateChange((event) => {
       void (async () => {
         try {
+          if (event === 'TOKEN_REFRESHED') return;
           const user = await getSessionUser();
           if (!user) {
             setUserId(null);
@@ -512,11 +1048,19 @@ function App() {
             setBacklogOrder([]);
             setKanbanOrder([]);
             setSelectedWeekStart(nowWeekStartKey());
+            setProfileTimezone(localTimezone());
+            setWorkBlocks([]);
+            setSettingsTimezoneDraft(localTimezone());
+            setSettingsWorkBlocksDraft([]);
+            setPendingWorkBlockStart('');
+            setPendingWorkBlockEnd('');
+            setSettingsOpen(false);
             return;
           }
 
           setUserId(user.id);
           setUserEmail(user.email ?? '');
+          if (taskInModal) return;
           await refreshPlannerData(user.id);
         } catch (error) {
           setErrorMessage(error instanceof Error ? error.message : 'Failed to refresh session.');
@@ -525,9 +1069,10 @@ function App() {
     });
 
     return unsubscribe;
-  }, []);
+  }, [taskInModal]);
 
   useEffect(() => {
+    if (taskInModal) return;
     if (!userId || tasks.length === 0) return;
     if (!tasks.some((task) => task.repeat?.enabled && !task.repeatParentId)) return;
 
@@ -540,14 +1085,14 @@ function App() {
         setErrorMessage(null);
       } catch (error) {
         if (cancelled) return;
-        setErrorMessage(error instanceof Error ? error.message : 'Failed to generate recurring tasks.');
+        setErrorMessage(getErrorMessage(error, 'Failed to generate recurring tasks.'));
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [userId, weekKey, tasks]);
+  }, [userId, weekKey, tasks, taskInModal]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -558,8 +1103,59 @@ function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    try {
+      const rawValue = window.localStorage.getItem(hiddenClientSuggestionsStorageKey);
+      if (!rawValue) {
+        setHiddenClientSuggestions([]);
+        setLoadedHiddenClientSuggestionsKey(hiddenClientSuggestionsStorageKey);
+        return;
+      }
+
+      const parsed = JSON.parse(rawValue);
+      if (!Array.isArray(parsed)) {
+        setHiddenClientSuggestions([]);
+        setLoadedHiddenClientSuggestionsKey(hiddenClientSuggestionsStorageKey);
+        return;
+      }
+
+      setHiddenClientSuggestions(
+        parsed.filter((value): value is string => typeof value === 'string' && value.trim().length > 0),
+      );
+      setLoadedHiddenClientSuggestionsKey(hiddenClientSuggestionsStorageKey);
+    } catch {
+      setHiddenClientSuggestions([]);
+      setLoadedHiddenClientSuggestionsKey(hiddenClientSuggestionsStorageKey);
+    }
+  }, [hiddenClientSuggestionsStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (loadedHiddenClientSuggestionsKey !== hiddenClientSuggestionsStorageKey) return;
+    window.localStorage.setItem(hiddenClientSuggestionsStorageKey, JSON.stringify(hiddenClientSuggestions));
+  }, [hiddenClientSuggestions, hiddenClientSuggestionsStorageKey, loadedHiddenClientSuggestionsKey]);
+
   function replaceTask(nextTask: Task) {
     setTasks((current) => current.map((task) => (task.id === nextTask.id ? nextTask : task)));
+  }
+
+  function hideClientSuggestion(client: string) {
+    const clientKey = normalizeClientKey(client);
+    if (!clientKey) return;
+
+    setHiddenClientSuggestions((current) => {
+      if (current.some((value) => normalizeClientKey(value) === clientKey)) return current;
+      return [...current, client];
+    });
+  }
+
+  function restoreClientSuggestion(client: string) {
+    const clientKey = normalizeClientKey(client);
+    if (!clientKey) return;
+
+    setHiddenClientSuggestions((current) => current.filter((value) => normalizeClientKey(value) !== clientKey));
   }
 
   function clearDragState() {
@@ -572,6 +1168,16 @@ function App() {
     setBacklogInsertIndex(null);
     setDragOverStatus(null);
     setKanbanDropTarget(null);
+  }
+
+  function openTaskContextMenu(taskId: string, event: ReactMouseEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const menuWidth = 170;
+    const menuHeight = 44;
+    const x = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8));
+    const y = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8));
+    setTaskContextMenu({ taskId, x, y });
   }
 
   function startTaskResize(task: Task, event: ReactMouseEvent<HTMLDivElement>) {
@@ -739,6 +1345,45 @@ function App() {
     return null;
   }
 
+  function findNextAvailableTimelineSlotAfter(sourceTask: Task) {
+    if (!sourceTask.scheduled) return null;
+
+    const neededSlots = durationToSlots(sourceTask.duration);
+    const maxStart = TOTAL_SLOTS - neededSlots;
+    if (maxStart < 0) return null;
+
+    const canPlaceAt = (dayIndex: number, start: number) => {
+      if (start < 0 || start > maxStart) return false;
+      const end = start + neededSlots;
+
+      return !tasks.some((task) => {
+        const scheduled = task.scheduled;
+        if (!scheduled) return false;
+        if (scheduled.weekKey !== sourceTask.scheduled?.weekKey) return false;
+        if (scheduled.dayIndex !== dayIndex) return false;
+
+        const taskStart = scheduled.slot;
+        const taskEnd = taskStart + durationToSlots(task.duration);
+        return start < taskEnd && end > taskStart;
+      });
+    };
+
+    for (let dayIndex = sourceTask.scheduled.dayIndex; dayIndex < DAY_NAMES.length; dayIndex += 1) {
+      const startSlot =
+        dayIndex === sourceTask.scheduled.dayIndex
+          ? Math.max(0, sourceTask.scheduled.slot + neededSlots)
+          : 0;
+
+      for (let slot = startSlot; slot <= maxStart; slot += 1) {
+        if (canPlaceAt(dayIndex, slot)) {
+          return { dayIndex, slot };
+        }
+      }
+    }
+
+    return null;
+  }
+
   function buildStableShiftPlan(
     taskId: string,
     dayIndex: number,
@@ -805,6 +1450,7 @@ function App() {
         patches.map((patch) =>
           updateTask(userId, patch.taskId, {
             scheduled: makeScheduled(weekKey, dayIndex, patch.slot),
+            planningSource: undefined,
           }),
         ),
       );
@@ -971,6 +1617,56 @@ function App() {
     }
   }
 
+  async function handleDuplicateTask(taskId: string) {
+    if (!userId) return;
+    const source = taskById.get(taskId);
+    if (!source) return;
+
+    setTaskContextMenu(null);
+    setSaving(true);
+    try {
+      const scheduledPlacement = source.scheduled ? findNextAvailableTimelineSlotAfter(source) : null;
+      const created = await createTask(userId, source.title);
+      const duplicatePatch: Partial<Task> = {
+        client: source.client,
+        activity: source.activity,
+        planningSource: undefined,
+        projectValue: source.projectValue,
+        completed: false,
+        duration: source.duration,
+        dueDate: source.dueDate,
+        projectDeadline: source.projectDeadline,
+        urgent: source.urgent,
+        important: source.important,
+        notes: source.notes,
+        links: [...source.links],
+        attachments: source.attachments.map((attachment) => ({ ...attachment })),
+        status: source.status === 'Done' ? 'Not Started' : source.status,
+        scheduled:
+          source.scheduled && scheduledPlacement
+            ? makeScheduled(source.scheduled.weekKey, scheduledPlacement.dayIndex, scheduledPlacement.slot)
+            : undefined,
+        repeat: undefined,
+        repeatParentId: undefined,
+      };
+      const duplicated = await updateTask(userId, created.id, duplicatePatch);
+      setTasks((current) => [duplicated, ...current]);
+      if (!duplicated.scheduled) {
+        const nextOrder = [duplicated.id, ...backlogOrder.filter((id) => id !== duplicated.id)];
+        await persistBacklogOrder(nextOrder);
+      }
+      if (duplicated.scheduled?.weekKey === weekKey) {
+        const nextKanbanOrder = [duplicated.id, ...kanbanOrder.filter((id) => id !== duplicated.id)];
+        await persistKanbanOrder(nextKanbanOrder);
+      }
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to duplicate task.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function scheduleTaskAtSlot(taskId: string, dayIndex: number, slot: number) {
     const shiftPlan = buildStableShiftPlan(taskId, dayIndex, slot);
     if (shiftPlan) {
@@ -991,6 +1687,7 @@ function App() {
     const task = await createTask(userId, title);
     const scheduledTask = await updateTask(userId, task.id, {
       scheduled: makeScheduled(weekKey, dayIndex, slot),
+      planningSource: undefined,
     });
     setTasks((current) => [scheduledTask, ...current]);
     const nextKanbanOrder = [scheduledTask.id, ...kanbanOrder.filter((id) => id !== scheduledTask.id)];
@@ -1081,9 +1778,13 @@ function App() {
   function buildTemplatePatchFromTaskPatch(patch: Partial<Task>): Partial<Task> {
     const templatePatch: Partial<Task> = {};
     if (Object.prototype.hasOwnProperty.call(patch, 'title')) templatePatch.title = patch.title;
+    if (Object.prototype.hasOwnProperty.call(patch, 'client')) templatePatch.client = patch.client;
+    if (Object.prototype.hasOwnProperty.call(patch, 'activity')) templatePatch.activity = patch.activity;
+    if (Object.prototype.hasOwnProperty.call(patch, 'projectValue')) templatePatch.projectValue = patch.projectValue;
     if (Object.prototype.hasOwnProperty.call(patch, 'status')) templatePatch.status = patch.status;
     if (Object.prototype.hasOwnProperty.call(patch, 'duration')) templatePatch.duration = patch.duration;
     if (Object.prototype.hasOwnProperty.call(patch, 'dueDate')) templatePatch.dueDate = patch.dueDate;
+    if (Object.prototype.hasOwnProperty.call(patch, 'projectDeadline')) templatePatch.projectDeadline = patch.projectDeadline;
     if (Object.prototype.hasOwnProperty.call(patch, 'urgent')) templatePatch.urgent = patch.urgent;
     if (Object.prototype.hasOwnProperty.call(patch, 'important')) templatePatch.important = patch.important;
     if (Object.prototype.hasOwnProperty.call(patch, 'notes')) templatePatch.notes = patch.notes;
@@ -1092,11 +1793,154 @@ function App() {
     return templatePatch;
   }
 
+  function mergeTaskDetails(nextTask: Task, existingTask?: Task, patch?: Partial<Task>) {
+    const hasClientPatch = patch ? Object.prototype.hasOwnProperty.call(patch, 'client') : false;
+    const hasActivityPatch = patch ? Object.prototype.hasOwnProperty.call(patch, 'activity') : false;
+    const hasPlanningSourcePatch = patch ? Object.prototype.hasOwnProperty.call(patch, 'planningSource') : false;
+    const hasProjectValuePatch = patch ? Object.prototype.hasOwnProperty.call(patch, 'projectValue') : false;
+    const hasProjectDeadlinePatch = patch ? Object.prototype.hasOwnProperty.call(patch, 'projectDeadline') : false;
+
+    return {
+      ...(existingTask ?? nextTask),
+      ...nextTask,
+      client: hasClientPatch ? patch?.client ?? '' : nextTask.client ?? existingTask?.client ?? '',
+      activity: hasActivityPatch ? patch?.activity ?? '' : nextTask.activity ?? existingTask?.activity ?? '',
+      planningSource: hasPlanningSourcePatch ? patch?.planningSource ?? undefined : nextTask.planningSource ?? existingTask?.planningSource,
+      projectValue: hasProjectValuePatch ? patch?.projectValue ?? '' : nextTask.projectValue ?? existingTask?.projectValue ?? '',
+      projectDeadline: hasProjectDeadlinePatch
+        ? patch?.projectDeadline ?? ''
+        : nextTask.projectDeadline ?? existingTask?.projectDeadline ?? '',
+    };
+  }
+
+  function inheritProjectDeadlineForBrand(patch: Partial<Task>, currentTask?: Task) {
+    const hasClientPatch = Object.prototype.hasOwnProperty.call(patch, 'client');
+    const hasProjectDeadlinePatch = Object.prototype.hasOwnProperty.call(patch, 'projectDeadline');
+    if (!hasClientPatch && !hasProjectDeadlinePatch) return patch;
+
+    const nextClient = hasClientPatch ? patch.client ?? '' : currentTask?.client ?? '';
+    const nextProjectDeadline = hasProjectDeadlinePatch ? patch.projectDeadline ?? '' : currentTask?.projectDeadline ?? '';
+    if (!nextClient.trim() || nextProjectDeadline) return patch;
+
+    const inheritedProjectDeadline = projectDeadlineByClient[normalizeClientKey(nextClient)] ?? '';
+
+    if (!inheritedProjectDeadline) return patch;
+    return { ...patch, projectDeadline: inheritedProjectDeadline };
+  }
+
+  function inheritProjectValueForBrand(patch: Partial<Task>, currentTask?: Task) {
+    const hasClientPatch = Object.prototype.hasOwnProperty.call(patch, 'client');
+    const hasProjectValuePatch = Object.prototype.hasOwnProperty.call(patch, 'projectValue');
+    if (!hasClientPatch && !hasProjectValuePatch) return patch;
+
+    const nextClient = hasClientPatch ? patch.client ?? '' : currentTask?.client ?? '';
+    const nextProjectValue = hasProjectValuePatch ? patch.projectValue ?? '' : currentTask?.projectValue ?? '';
+    if (!nextClient.trim() || nextProjectValue) return patch;
+
+    const inheritedProjectValue = projectValueByClient[normalizeClientKey(nextClient)] ?? '';
+
+    if (!inheritedProjectValue) return patch;
+    return { ...patch, projectValue: inheritedProjectValue };
+  }
+
+  function getProjectDeadlinePropagation(taskId: string, patch: Partial<Task>, currentTask?: Task) {
+    if (!Object.prototype.hasOwnProperty.call(patch, 'projectDeadline')) return null;
+
+    const nextClient = Object.prototype.hasOwnProperty.call(patch, 'client') ? patch.client ?? '' : currentTask?.client ?? '';
+    const brandKey = normalizeClientKey(nextClient);
+    if (!brandKey) return null;
+
+    const nextProjectDeadline = patch.projectDeadline ?? '';
+    const relatedTasks = tasks.filter((task) => normalizeClientKey(task.client) === brandKey);
+    const taskIds = new Set(relatedTasks.map((task) => task.id));
+    taskIds.add(taskId);
+    const hasMismatch = relatedTasks.some((task) => (task.projectDeadline ?? '') !== nextProjectDeadline);
+    if (!hasMismatch && (currentTask?.projectDeadline ?? '') === nextProjectDeadline) return null;
+
+    return {
+      taskIds: [...taskIds],
+      projectDeadline: nextProjectDeadline,
+    };
+  }
+
+  function getProjectValuePropagation(taskId: string, patch: Partial<Task>, currentTask?: Task) {
+    if (!Object.prototype.hasOwnProperty.call(patch, 'projectValue')) return null;
+
+    const nextClient = Object.prototype.hasOwnProperty.call(patch, 'client') ? patch.client ?? '' : currentTask?.client ?? '';
+    const projectKey = normalizeClientKey(nextClient);
+    if (!projectKey) return null;
+
+    const nextProjectValue = patch.projectValue ?? '';
+    const relatedTasks = tasks.filter((task) => normalizeClientKey(task.client) === projectKey);
+    const taskIds = new Set(relatedTasks.map((task) => task.id));
+    taskIds.add(taskId);
+    const hasMismatch = relatedTasks.some((task) => (task.projectValue ?? '') !== nextProjectValue);
+    if (!hasMismatch && (currentTask?.projectValue ?? '') === nextProjectValue) return null;
+
+    return {
+      taskIds: [...taskIds],
+      projectValue: nextProjectValue,
+    };
+  }
+
+  async function applyProjectDeadlinePropagation(
+    propagation: { taskIds: string[]; projectDeadline: string } | null,
+    updatesById?: Map<string, Task>,
+  ) {
+    const nextUpdatesById = updatesById ? new Map(updatesById) : new Map<string, Task>();
+    if (!propagation || !userId) return nextUpdatesById;
+
+    const taskIdsToUpdate = propagation.taskIds.filter((id) => {
+      const currentTask = nextUpdatesById.get(id) ?? taskById.get(id);
+      return (currentTask?.projectDeadline ?? '') !== propagation.projectDeadline;
+    });
+
+    if (taskIdsToUpdate.length === 0) return nextUpdatesById;
+
+    const propagatedTasks = await Promise.all(
+      taskIdsToUpdate.map((id) => updateTask(userId, id, { projectDeadline: propagation.projectDeadline })),
+    );
+
+    propagatedTasks.forEach((task) => nextUpdatesById.set(task.id, task));
+    return nextUpdatesById;
+  }
+
+  async function applyProjectValuePropagation(
+    propagation: { taskIds: string[]; projectValue: string } | null,
+    updatesById?: Map<string, Task>,
+  ) {
+    const nextUpdatesById = updatesById ? new Map(updatesById) : new Map<string, Task>();
+    if (!propagation || !userId) return nextUpdatesById;
+
+    const taskIdsToUpdate = propagation.taskIds.filter((id) => {
+      const currentTask = nextUpdatesById.get(id) ?? taskById.get(id);
+      return (currentTask?.projectValue ?? '') !== propagation.projectValue;
+    });
+
+    if (taskIdsToUpdate.length === 0) return nextUpdatesById;
+
+    const propagatedTasks = await Promise.all(
+      taskIdsToUpdate.map((id) => updateTask(userId, id, { projectValue: propagation.projectValue })),
+    );
+
+    propagatedTasks.forEach((task) => nextUpdatesById.set(task.id, task));
+    return nextUpdatesById;
+  }
+
   async function patchTask(taskId: string, patch: Partial<Task>, updateScope: 'single' | 'future' = 'single') {
     if (!userId) return;
 
     const currentTask = taskById.get(taskId);
+    const currentTaskHasValidRepeatParent = hasValidRepeatParent(currentTask, taskById);
+    patch = inheritProjectDeadlineForBrand(patch, currentTask);
+    patch = inheritProjectValueForBrand(patch, currentTask);
+    const projectDeadlinePropagation = getProjectDeadlinePropagation(taskId, patch, currentTask);
+    const projectValuePropagation = getProjectValuePropagation(taskId, patch, currentTask);
     let hasRepeatPatch = Object.prototype.hasOwnProperty.call(patch, 'repeat');
+    const repeatPatch = hasRepeatPatch ? patch.repeat : undefined;
+    if (currentTask?.repeatParentId && currentTaskHasValidRepeatParent && hasRepeatPatch && !repeatPatch?.enabled) {
+      updateScope = 'future';
+    }
     const hasScheduledPatch = Object.prototype.hasOwnProperty.call(patch, 'scheduled');
     const hasEffectiveScheduledPatch =
       hasScheduledPatch &&
@@ -1113,10 +1957,14 @@ function App() {
         );
       })();
 
-    if (currentTask?.repeatParentId && updateScope === 'future') {
+    if (hasEffectiveScheduledPatch && !Object.prototype.hasOwnProperty.call(patch, 'planningSource')) {
+      patch = { ...patch, planningSource: undefined };
+    }
+
+    if (currentTask?.repeatParentId && currentTaskHasValidRepeatParent && updateScope === 'future') {
       const anchorScheduled = currentTask.scheduled;
       const parentId = currentTask.repeatParentId;
-      const repeatPatch = patch.repeat;
+      const parentTask = taskById.get(parentId);
       const taskPatch: Partial<Task> = { ...patch };
       delete taskPatch.repeat;
       delete taskPatch.scheduled;
@@ -1124,10 +1972,20 @@ function App() {
 
       setSaving(true);
       try {
-        const updatesById = new Map<string, Task>();
+        let updatesById = new Map<string, Task>();
+        const deleteIds = new Set<string>();
         const parentPatch: Partial<Task> = buildTemplatePatchFromTaskPatch(taskPatch);
+        const shouldSplitSeriesFromAnchor = Boolean(hasRepeatPatch && anchorScheduled && parentTask?.repeat);
+        let nextSeriesParentId = parentId;
+        const shouldDisableSeriesFromAnchor = Boolean(hasRepeatPatch && !repeatPatch?.enabled);
 
-        if (hasRepeatPatch) {
+        if (shouldDisableSeriesFromAnchor) {
+          parentPatch.repeat = anchorScheduled && parentTask?.repeat
+            ? endRepeatBeforeScheduled(parentTask.repeat, anchorScheduled)
+            : undefined;
+        } else if (shouldSplitSeriesFromAnchor && parentTask?.repeat) {
+          parentPatch.repeat = endRepeatBeforeScheduled(parentTask.repeat, anchorScheduled!);
+        } else if (hasRepeatPatch) {
           parentPatch.repeat = repeatPatch?.enabled ? repeatPatch : undefined;
         }
 
@@ -1136,17 +1994,48 @@ function App() {
           updatesById.set(updatedParent.id, updatedParent);
         }
 
-        const seriesInstances = tasks.filter(
-          (task) =>
-            task.repeatParentId === parentId &&
-            task.scheduled &&
-            anchorScheduled &&
-            compareScheduledPosition(task.scheduled, anchorScheduled) >= 0,
-        );
-        const updatedInstances = await Promise.all(
-          seriesInstances.map((instance) => updateTask(userId, instance.id, taskPatch)),
-        );
+        if (shouldSplitSeriesFromAnchor && repeatPatch?.enabled && anchorScheduled) {
+          const templateSource = {
+            ...currentTask,
+            ...taskPatch,
+            repeatParentId: undefined,
+            repeat: undefined,
+            scheduled: anchorScheduled,
+          };
+          const nextTemplate = await createRepeatTemplate(userId, templateSource, anchorRepeatToScheduled(repeatPatch, anchorScheduled));
+          updatesById.set(nextTemplate.id, nextTemplate);
+          nextSeriesParentId = nextTemplate.id;
+        }
+
+        const seriesInstances = tasks.filter((task) => {
+          if (task.repeatParentId !== parentId) return false;
+          return isSeriesTaskOnOrAfterAnchor(task, currentTask);
+        });
+        const currentInstancePatch = {
+          ...taskPatch,
+          ...(hasRepeatPatch ? { repeatParentId: repeatPatch?.enabled ? nextSeriesParentId : undefined } : {}),
+        };
+        const otherFutureInstances = seriesInstances.filter((task) => task.id !== currentTask.id);
+
+        if (shouldDisableSeriesFromAnchor) {
+          otherFutureInstances.forEach((task) => deleteIds.add(task.id));
+        }
+
+        const updatedInstances = await Promise.all([
+          updateTask(userId, currentTask.id, currentInstancePatch),
+          ...(!shouldDisableSeriesFromAnchor
+            ? otherFutureInstances.map((instance) =>
+                updateTask(userId, instance.id, {
+                  ...taskPatch,
+                  ...(hasRepeatPatch ? { repeatParentId: repeatPatch?.enabled ? nextSeriesParentId : undefined } : {}),
+                }),
+              )
+            : []),
+        ]);
         updatedInstances.forEach((task) => updatesById.set(task.id, task));
+        if (deleteIds.size > 0) {
+          await Promise.all(Array.from(deleteIds, (id) => deleteTask(userId, id)));
+        }
 
         let created: Task[] = [];
         if (hasRepeatPatch && repeatPatch?.enabled) {
@@ -1158,8 +2047,18 @@ function App() {
           created = await ensureRepeatingTasksForWeek(userId, weekKey, nextTasks);
         }
 
+        updatesById = await applyProjectDeadlinePropagation(projectDeadlinePropagation, updatesById);
+        updatesById = await applyProjectValuePropagation(projectValuePropagation, updatesById);
+
         setTasks((current) => {
-          const next = current.map((task) => updatesById.get(task.id) ?? task);
+          const next = current
+            .filter((task) => !deleteIds.has(task.id))
+            .map((task) => {
+            const updatedTask = updatesById.get(task.id);
+            if (!updatedTask) return task;
+            const patchSource = task.id === parentId ? parentPatch : taskPatch;
+            return mergeTaskDetails(updatedTask, task, patchSource);
+            });
           const existing = new Set(next.map((task) => task.id));
           updatesById.forEach((task) => {
             if (!existing.has(task.id)) {
@@ -1177,14 +2076,14 @@ function App() {
         });
         setErrorMessage(null);
       } catch (error) {
-        setErrorMessage(error instanceof Error ? error.message : 'Failed to update future recurring tasks.');
+        setErrorMessage(getErrorMessage(error, 'Failed to update future recurring tasks.'));
       } finally {
         setSaving(false);
       }
       return;
     }
 
-    if (currentTask?.repeatParentId && updateScope === 'single' && hasRepeatPatch) {
+    if (currentTask?.repeatParentId && currentTaskHasValidRepeatParent && updateScope === 'single' && hasRepeatPatch) {
       const taskPatch: Partial<Task> = { ...patch };
       delete taskPatch.repeat;
       patch = taskPatch;
@@ -1192,21 +2091,27 @@ function App() {
     }
 
     if (currentTask && hasRepeatPatch) {
-      const repeatPatch = patch.repeat;
       const taskPatch: Partial<Task> = { ...patch };
       delete taskPatch.repeat;
+      const shouldDetachOrphanSeries = Boolean(currentTask.repeatParentId && !currentTaskHasValidRepeatParent);
 
       setSaving(true);
       try {
-        const updatesById = new Map<string, Task>();
+        let updatesById = new Map<string, Task>();
 
-        if (currentTask.repeatParentId) {
+        if (shouldDetachOrphanSeries) {
+          taskPatch.repeatParentId = undefined;
+        }
+
+        if (currentTask.repeatParentId && currentTaskHasValidRepeatParent) {
           const parentPatch: Partial<Task> = { repeat: repeatPatch?.enabled ? repeatPatch : undefined };
           const updatedParent = await updateTask(userId, currentTask.repeatParentId, parentPatch);
           updatesById.set(updatedParent.id, updatedParent);
         } else if (repeatPatch?.enabled) {
-          const templateSource = { ...currentTask, ...taskPatch };
-          const template = await createRepeatTemplate(userId, templateSource, repeatPatch);
+          const templateSource = { ...currentTask, ...taskPatch, repeatParentId: undefined, repeat: undefined };
+          const anchoredRepeat =
+            templateSource.scheduled ? anchorRepeatToScheduled(repeatPatch, templateSource.scheduled) : repeatPatch;
+          const template = await createRepeatTemplate(userId, templateSource, anchoredRepeat);
           updatesById.set(template.id, template);
           taskPatch.repeatParentId = template.id;
         }
@@ -1225,8 +2130,16 @@ function App() {
           created = await ensureRepeatingTasksForWeek(userId, weekKey, nextTasks);
         }
 
+        updatesById = await applyProjectDeadlinePropagation(projectDeadlinePropagation, updatesById);
+        updatesById = await applyProjectValuePropagation(projectValuePropagation, updatesById);
+
         setTasks((current) => {
-          const next = current.map((task) => updatesById.get(task.id) ?? task);
+          const next = current.map((task) => {
+            const updatedTask = updatesById.get(task.id);
+            if (!updatedTask) return task;
+            const patchSource = task.id === taskId ? taskPatch : undefined;
+            return mergeTaskDetails(updatedTask, task, patchSource);
+          });
           const existing = new Set(next.map((task) => task.id));
           updatesById.forEach((task) => {
             if (!existing.has(task.id)) {
@@ -1245,7 +2158,7 @@ function App() {
 
         setErrorMessage(null);
       } catch (error) {
-        setErrorMessage(error instanceof Error ? error.message : 'Failed to update recurring task settings.');
+        setErrorMessage(getErrorMessage(error, 'Failed to update recurring task settings.'));
       } finally {
         setSaving(false);
       }
@@ -1275,16 +2188,27 @@ function App() {
           updateTask(userId, taskId, {
             ...patch,
             scheduled: makeScheduled(plan.weekKey, plan.dayIndex, plan.movedTaskSlot),
+            planningSource: undefined,
           }),
           ...shiftedPatches.map((entry) =>
             updateTask(userId, entry.taskId, {
               scheduled: makeScheduled(plan.weekKey, plan.dayIndex, entry.slot),
+              planningSource: undefined,
             }),
           ),
         ]);
 
-        const updatedById = new Map(updates.map((task) => [task.id, task]));
-        setTasks((current) => current.map((task) => updatedById.get(task.id) ?? task));
+        let updatedById = new Map(updates.map((task) => [task.id, task]));
+        updatedById = await applyProjectDeadlinePropagation(projectDeadlinePropagation, updatedById);
+        updatedById = await applyProjectValuePropagation(projectValuePropagation, updatedById);
+        setTasks((current) =>
+          current.map((task) => {
+            const updatedTask = updatedById.get(task.id);
+            if (!updatedTask) return task;
+            const patchSource = task.id === taskId ? patch : undefined;
+            return mergeTaskDetails(updatedTask, task, patchSource);
+          }),
+        );
         setErrorMessage(null);
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : 'Failed to update task duration.');
@@ -1297,7 +2221,17 @@ function App() {
     setSaving(true);
     try {
       const nextTask = await updateTask(userId, taskId, patch);
-      replaceTask(nextTask);
+      let updatedById = new Map([[nextTask.id, nextTask]]);
+      updatedById = await applyProjectDeadlinePropagation(projectDeadlinePropagation, updatedById);
+      updatedById = await applyProjectValuePropagation(projectValuePropagation, updatedById);
+      setTasks((current) =>
+        current.map((task) => {
+          const updatedTask = updatedById.get(task.id);
+          if (!updatedTask) return task;
+          const patchSource = task.id === taskId ? patch : undefined;
+          return mergeTaskDetails(updatedTask, task, patchSource);
+        }),
+      );
       setErrorMessage(null);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to update task.');
@@ -1344,6 +2278,493 @@ function App() {
       setErrorMessage(null);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to save selected week.');
+    }
+  }
+
+  async function handlePlanMyWeek() {
+    if (!userId) return;
+
+    if (tempoPlanningStartDay >= DAY_NAMES.length) {
+      setTempoPlanNotice({
+        tone: 'warning',
+        text: 'Tempo only plans future days, so there is nothing left to schedule in this week.',
+      });
+      return;
+    }
+
+    if (workBlocks.length === 0) {
+      setTempoPlanNotice({
+        tone: 'warning',
+        text: 'Tempo needs at least one saved work block before it can build your week.',
+      });
+      return;
+    }
+
+    if (tempoPlannableTasks.length === 0) {
+      setTempoPlanNotice({
+        tone: 'neutral',
+        text: 'Nothing unscheduled is waiting for Tempo right now.',
+      });
+      return;
+    }
+
+    const occupied = Array.from({ length: DAY_NAMES.length }, () => Array.from({ length: TOTAL_SLOTS }, () => false));
+    weekTasks.forEach((task) => {
+      if (!task.scheduled) return;
+      const start = task.scheduled.slot;
+      const end = Math.min(TOTAL_SLOTS, start + durationToSlots(task.duration));
+      for (let slot = start; slot < end; slot += 1) {
+        occupied[task.scheduled.dayIndex][slot] = true;
+      }
+    });
+
+    const tasksByProject = new Map<string, Task[]>();
+    tempoPlannableTasks.forEach((task) => {
+      const projectKey = normalizeClientKey(task.client) || `task:${task.id}`;
+      const projectTasks = tasksByProject.get(projectKey);
+      if (projectTasks) {
+        projectTasks.push(task);
+      } else {
+        tasksByProject.set(projectKey, [task]);
+      }
+    });
+
+    const orderedProjectQueues = Array.from(tasksByProject.entries())
+      .map(([projectKey, projectTasks]) => ({
+        projectKey,
+        projectPriorityScore: getTempoProjectPriorityScore(projectTasks, weekKey),
+        oldestCreatedAt: projectTasks.reduce(
+          (currentOldest, task) =>
+            currentOldest.localeCompare(task.createdAt) <= 0 ? currentOldest : task.createdAt,
+          projectTasks[0].createdAt,
+        ),
+        highestProjectValue: Math.max(...projectTasks.map((task) => parseProjectValueAmount(task.projectValue))),
+        statusSortValue: getTempoProjectStatusSortValue(projectTasks),
+        tasks: [...projectTasks].sort((a, b) => {
+          const flowDiff = getTempoProjectFlowRank(a.activity) - getTempoProjectFlowRank(b.activity);
+          if (flowDiff !== 0) return flowDiff;
+
+          const titleDiff = naturalTitleCollator.compare(a.title, b.title);
+          if (titleDiff !== 0) return titleDiff;
+
+          const scoreDiff = getTempoPriorityScore(b, weekKey) - getTempoPriorityScore(a, weekKey);
+          if (scoreDiff !== 0) return scoreDiff;
+
+          const deadlineDiff = getTempoDeadlineSortValue(a) - getTempoDeadlineSortValue(b);
+          if (deadlineDiff !== 0) return deadlineDiff;
+
+          const statusDiff = getTempoStatusSortValue(a.status) - getTempoStatusSortValue(b.status);
+          if (statusDiff !== 0) return statusDiff;
+
+          const projectValueDiff = parseProjectValueAmount(b.projectValue) - parseProjectValueAmount(a.projectValue);
+          if (projectValueDiff !== 0) return projectValueDiff;
+
+          if (a.duration !== b.duration) return a.duration - b.duration;
+          return a.createdAt.localeCompare(b.createdAt);
+        }),
+      }))
+      .sort((a, b) => {
+        const scoreDiff = b.projectPriorityScore - a.projectPriorityScore;
+        if (scoreDiff !== 0) return scoreDiff;
+
+        const valueDiff = b.highestProjectValue - a.highestProjectValue;
+        if (valueDiff !== 0) return valueDiff;
+
+        const statusDiff = a.statusSortValue - b.statusSortValue;
+        if (statusDiff !== 0) return statusDiff;
+
+        return a.oldestCreatedAt.localeCompare(b.oldestCreatedAt);
+      });
+
+    const orderedTasks: Task[] = [];
+    let hasRemainingProjectTasks = true;
+    while (hasRemainingProjectTasks) {
+      hasRemainingProjectTasks = false;
+      orderedProjectQueues.forEach((projectQueue) => {
+        const nextTask = projectQueue.tasks.shift();
+        if (!nextTask) return;
+        orderedTasks.push(nextTask);
+        hasRemainingProjectTasks = true;
+      });
+    }
+
+    const plannedEntries: Array<{ taskId: string; dayIndex: number; slot: number }> = [];
+    const unscheduledCountByTaskId = new Set<string>();
+    const shootCountByDay = Array.from({ length: DAY_NAMES.length }, () => 0);
+
+    weekTasks.forEach((task) => {
+      if (task.activity !== 'Shoot') return;
+      const dayIndex = task.scheduled?.dayIndex;
+      if (!Number.isFinite(dayIndex)) return;
+      shootCountByDay[dayIndex as number] += 1;
+    });
+
+    orderedTasks.forEach((task) => {
+      const neededSlots = durationToSlots(task.duration);
+      let placed = false;
+
+      for (let dayIndex = tempoPlanningStartDay; dayIndex < DAY_NAMES.length && !placed; dayIndex += 1) {
+        if (task.activity === 'Shoot' && shootCountByDay[dayIndex] >= 2) continue;
+
+        const candidateRanges = [...tempoWorkRangesByDay[dayIndex]]
+          .map((range) => ({ ...range, preference: getTempoRangePreference(task, range) }))
+          .filter((range) => Number.isFinite(range.preference))
+          .sort((a, b) => a.preference - b.preference || a.startSlot - b.startSlot);
+
+        for (const range of candidateRanges) {
+          const latestStart = range.endSlot - neededSlots;
+          if (latestStart < range.startSlot) continue;
+
+          for (let slot = range.startSlot; slot <= latestStart; slot += 1) {
+            let canFit = true;
+            if (slot > 0 && occupied[dayIndex][slot - 1]) canFit = false;
+            for (let cursor = slot; cursor < slot + neededSlots; cursor += 1) {
+              if (occupied[dayIndex][cursor]) {
+                canFit = false;
+                break;
+              }
+            }
+            if (canFit) {
+              const nextSlot = slot + neededSlots;
+              if (nextSlot < TOTAL_SLOTS && occupied[dayIndex][nextSlot]) canFit = false;
+            }
+
+            if (!canFit) continue;
+
+            for (let cursor = slot; cursor < slot + neededSlots; cursor += 1) {
+              occupied[dayIndex][cursor] = true;
+            }
+            plannedEntries.push({ taskId: task.id, dayIndex, slot });
+            if (task.activity === 'Shoot') shootCountByDay[dayIndex] += 1;
+            placed = true;
+            break;
+          }
+        }
+      }
+
+      if (!placed) unscheduledCountByTaskId.add(task.id);
+    });
+
+    const patchByTaskId = new Map(
+      plannedEntries.map((entry) => [
+        entry.taskId,
+        {
+          scheduled: makeScheduled(weekKey, entry.dayIndex, entry.slot),
+          planningSource: 'tempo' as const,
+        },
+      ]),
+    );
+    const undoEntries = plannedEntries.map((entry) => {
+      const task = taskById.get(entry.taskId);
+      return {
+        taskId: entry.taskId,
+        previousScheduled: task?.scheduled,
+        previousPlanningSource: task?.planningSource,
+        plannedWeekKey: weekKey,
+        plannedDayIndex: entry.dayIndex,
+        plannedSlot: entry.slot,
+      } satisfies TempoUndoEntry;
+    });
+
+    setTempoPlanning(true);
+    setSaving(true);
+    try {
+      const updatedTasks = await Promise.all(
+        plannedEntries.map((entry) =>
+          updateTask(userId, entry.taskId, {
+            scheduled: makeScheduled(weekKey, entry.dayIndex, entry.slot),
+            planningSource: 'tempo',
+          }),
+        ),
+      );
+      const updatedById = new Map(updatedTasks.map((task) => [task.id, task]));
+      setTasks((current) =>
+        current.map((task) => {
+          const updatedTask = updatedById.get(task.id);
+          if (!updatedTask) return task;
+          return mergeTaskDetails(updatedTask, task, patchByTaskId.get(task.id));
+        }),
+      );
+      setTempoUndoEntries(undoEntries);
+      setTempoPlanNotice({
+        tone: unscheduledCountByTaskId.size > 0 ? 'warning' : 'neutral',
+        text:
+          plannedEntries.length > 0
+            ? `Plan complete. ${plannedEntries.length} task${plannedEntries.length === 1 ? '' : 's'} scheduled.${unscheduledCountByTaskId.size > 0 ? ` ${unscheduledCountByTaskId.size} could not fit into future work-block time this week.` : ''}`
+            : `Plan complete. No future work-block window was large enough for the remaining ${tempoPlannableTasks.length} task${tempoPlannableTasks.length === 1 ? '' : 's'}.`,
+      });
+      setErrorMessage(null);
+    } catch (error) {
+      setTempoUndoEntries([]);
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to plan your week.');
+    } finally {
+      setTempoPlanning(false);
+      setSaving(false);
+    }
+  }
+
+  async function handleUndoTempoPlan() {
+    if (!userId || tempoUndoEntries.length === 0) return;
+
+    const undoableEntries = tempoUndoEntries.filter((entry) => {
+      const task = taskById.get(entry.taskId);
+      const scheduled = task?.scheduled;
+      if (!task || !scheduled) return false;
+      return (
+        task.planningSource === 'tempo' &&
+        scheduled.weekKey === entry.plannedWeekKey &&
+        scheduled.dayIndex === entry.plannedDayIndex &&
+        scheduled.slot === entry.plannedSlot
+      );
+    });
+
+    if (undoableEntries.length === 0) {
+      setTempoUndoEntries([]);
+      setTempoPlanNotice({
+        tone: 'warning',
+        text: 'Nothing from the last Tempo run is still in its original spot, so there is nothing left to undo.',
+      });
+      return;
+    }
+
+    const patchByTaskId = new Map(
+      undoableEntries.map((entry) => [
+        entry.taskId,
+        {
+          scheduled: entry.previousScheduled,
+          planningSource: entry.previousPlanningSource,
+        } satisfies Partial<Task>,
+      ]),
+    );
+
+    setSaving(true);
+    try {
+      const updatedTasks = await Promise.all(
+        undoableEntries.map((entry) =>
+          updateTask(userId, entry.taskId, {
+            scheduled: entry.previousScheduled,
+            planningSource: entry.previousPlanningSource,
+          }),
+        ),
+      );
+      const updatedById = new Map(updatedTasks.map((task) => [task.id, task]));
+      setTasks((current) =>
+        current.map((task) => {
+          const updatedTask = updatedById.get(task.id);
+          if (!updatedTask) return task;
+          return mergeTaskDetails(updatedTask, task, patchByTaskId.get(task.id));
+        }),
+      );
+      const skippedCount = tempoUndoEntries.length - undoableEntries.length;
+      setTempoUndoEntries([]);
+      setTempoPlanNotice({
+        tone: skippedCount > 0 ? 'warning' : 'neutral',
+        text: `Undo complete. ${undoableEntries.length} task${undoableEntries.length === 1 ? '' : 's'} returned to the backlog.${skippedCount > 0 ? ` ${skippedCount} changed since the plan run and were left alone.` : ''}`,
+      });
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to undo the last Tempo plan.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleMoveUnfinishedWeekTasksToBacklog() {
+    if (!userId || unfinishedWeekTasks.length === 0) return;
+
+    const tasksToMove = sortTasksByWeeklySchedule(unfinishedWeekTasks, kanbanOrder);
+    const patchByTaskId = new Map(
+      tasksToMove.map((task) => [
+        task.id,
+        {
+          scheduled: undefined,
+          planningSource: undefined,
+        } satisfies Partial<Task>,
+      ]),
+    );
+
+    setSaving(true);
+    try {
+      const updatedTasks = await Promise.all(
+        tasksToMove.map((task) =>
+          updateTask(userId, task.id, {
+            scheduled: undefined,
+            planningSource: undefined,
+          }),
+        ),
+      );
+      const updatedById = new Map(updatedTasks.map((task) => [task.id, task]));
+      setTasks((current) =>
+        current.map((task) => {
+          const updatedTask = updatedById.get(task.id);
+          if (!updatedTask) return task;
+          return mergeTaskDetails(updatedTask, task, patchByTaskId.get(task.id));
+        }),
+      );
+
+      const movedIds = tasksToMove.map((task) => task.id);
+      const nextBacklogOrder = [...movedIds, ...backlogOrder.filter((id) => !movedIds.includes(id))];
+      await persistBacklogOrder(nextBacklogOrder);
+      setTempoUndoEntries([]);
+      setTempoPlanNotice({
+        tone: 'neutral',
+        text: `${tasksToMove.length} unfinished task${tasksToMove.length === 1 ? '' : 's'} moved back to backlog for ${formatWeekLabel(weekKey)}.`,
+      });
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to move unfinished tasks back to backlog.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function openSettingsModal() {
+    setSettingsTimezoneDraft(profileTimezone);
+    setSettingsWorkBlocksDraft(sortWorkBlocks(workBlocks.map((block) => ({ ...block }))));
+    setPendingWorkBlockStart('');
+    setPendingWorkBlockEnd('');
+    setSettingsPasswordDraft('');
+    setSettingsPasswordConfirmDraft('');
+    setDeleteAccountConfirmDraft('');
+    setSettingsOpen(true);
+  }
+
+  function addDraftWorkBlock() {
+    const nextBlock = {
+      start: pendingWorkBlockStart.trim(),
+      end: pendingWorkBlockEnd.trim(),
+    };
+    if (!nextBlock.start || !nextBlock.end) return;
+
+    try {
+      const normalized = normalizeWorkBlocksForSave([...settingsWorkBlocksDraft, nextBlock]);
+      setSettingsWorkBlocksDraft(normalized);
+      setPendingWorkBlockStart('');
+      setPendingWorkBlockEnd('');
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Invalid work block.');
+    }
+  }
+
+  function removeDraftWorkBlock(index: number) {
+    setSettingsWorkBlocksDraft((current) => current.filter((_, blockIndex) => blockIndex !== index));
+  }
+
+  function normalizeWorkBlocksForSave(blocks: WorkBlock[]) {
+    const cleaned = blocks
+      .map((block) => ({ start: block.start.trim(), end: block.end.trim() }))
+      .filter((block) => block.start || block.end);
+
+    if (cleaned.some((block) => !block.start || !block.end)) {
+      throw new Error('Each work block needs both a start and end time.');
+    }
+
+    const sorted = sortWorkBlocks(cleaned);
+
+    sorted.forEach((block) => {
+      if (getWorkBlockEndMinutes(block) <= parseTimeValueToMinutes(block.start)) {
+        throw new Error('Each work block must end after it starts.');
+      }
+    });
+
+    for (let index = 1; index < sorted.length; index += 1) {
+      const previous = sorted[index - 1];
+      const current = sorted[index];
+      if (parseTimeValueToMinutes(current.start) < getWorkBlockEndMinutes(previous)) {
+        throw new Error('Work blocks cannot overlap.');
+      }
+    }
+
+    return sorted;
+  }
+
+  async function handleSaveSettings() {
+    if (!userId) return;
+
+    const nextTimezone = settingsTimezoneDraft.trim() || localTimezone();
+    if (!isValidTimezone(nextTimezone)) {
+      setErrorMessage('Enter a valid IANA timezone, like America/Los_Angeles.');
+      return;
+    }
+
+    let normalizedBlocks: WorkBlock[];
+    try {
+      normalizedBlocks = normalizeWorkBlocksForSave(settingsWorkBlocksDraft);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Invalid work blocks.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await updateUserSettings(
+        userId,
+        {
+          timezone: nextTimezone,
+          workBlocks: normalizedBlocks,
+        },
+        selectedWeekStart,
+      );
+      setProfileTimezone(nextTimezone);
+      setWorkBlocks(normalizedBlocks);
+      setSettingsTimezoneDraft(nextTimezone);
+      setSettingsWorkBlocksDraft(normalizedBlocks);
+      setPendingWorkBlockStart('');
+      setPendingWorkBlockEnd('');
+      setSettingsOpen(false);
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to save settings.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleChangePassword() {
+    if (!settingsPasswordDraft) {
+      setErrorMessage('Enter a new password.');
+      return;
+    }
+    if (settingsPasswordDraft !== settingsPasswordConfirmDraft) {
+      setErrorMessage('New password and confirmation must match.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await changePassword(settingsPasswordDraft);
+      setSettingsPasswordDraft('');
+      setSettingsPasswordConfirmDraft('');
+      setErrorMessage(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to change password.';
+      if (message.toLowerCase().includes('nonce') || message.toLowerCase().includes('reauth')) {
+        setErrorMessage('Supabase requires re-authentication before changing your password. Sign in again and retry.');
+      } else {
+        setErrorMessage(message);
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDeleteAccount() {
+    if (deleteAccountConfirmDraft.trim() !== 'DELETE') {
+      setErrorMessage('Type DELETE to confirm account deletion.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await deleteAccount();
+      setSettingsOpen(false);
+      setDeleteAccountConfirmDraft('');
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to delete account.');
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -1509,7 +2930,7 @@ function App() {
           <img className="header-logo" src="/img/tempo2.png" alt="Plan with Tempo" />
           <div className="account-row">
             <span className="account-email">{userEmail || 'Signed in'}</span>
-            <button className="account-link" type="button">Settings</button>
+            <button className="account-link" type="button" onClick={openSettingsModal}>Settings</button>
             <button className="account-link" type="button" onClick={() => void signOut()}>Log Out</button>
           </div>
         </header>
@@ -1596,6 +3017,33 @@ function App() {
               <Columns3 size={15} />
             </button>
           </div>
+          <div className="tempo-cta-group">
+            <button
+              className="icon-text-button tempo-primary-button tempo-plan-button"
+              onClick={() => void handlePlanMyWeek()}
+              disabled={saving || tempoPlanning}
+            >
+              <Sparkles size={15} />
+              <span>{tempoPlanning ? 'Planning...' : 'Plan My Week'}</span>
+            </button>
+            <div className="tempo-link-row">
+              <button
+                className="tempo-undo-button"
+                onClick={() => void handleUndoTempoPlan()}
+                disabled={saving || tempoPlanning || tempoUndoEntries.length === 0}
+              >
+                Undo last Tempo run
+              </button>
+              <button
+                className="tempo-undo-button"
+                onClick={() => void handleMoveUnfinishedWeekTasksToBacklog()}
+                disabled={saving || tempoPlanning || unfinishedWeekTasks.length === 0}
+              >
+                Move unfinished tasks to backlog
+              </button>
+            </div>
+            <p className={`tempo-plan-note ${tempoPlanHint.tone}`}>{tempoPlanHint.text}</p>
+          </div>
         </div>
 
         <section className="progress-strip" aria-live="polite">
@@ -1670,6 +3118,7 @@ function App() {
                       })
                     }
                     onHandlePointerDown={(event) => onTaskHandlePointerDown(task.id, event)}
+                    onRequestContextMenu={(event) => openTaskContextMenu(task.id, event)}
                     isDragging={draggingTaskId === task.id}
                   />
                 </div>
@@ -1723,6 +3172,7 @@ function App() {
                             })
                           }
                           onHandlePointerDown={(event) => onTaskHandlePointerDown(task.id, event)}
+                          onRequestContextMenu={(event) => openTaskContextMenu(task.id, event)}
                           isDragging={draggingTaskId === task.id}
                         />
                       </div>
@@ -1764,11 +3214,12 @@ function App() {
                 <div className="time-axis-track">
                   {Array.from({ length: TOTAL_SLOTS }).map((_, slot) => {
                     const isHour = slot % slotsPerHour === 0;
+                    const isHourBoundary = (slot + 1) % slotsPerHour === 0;
                     const hourBand = Math.floor(slot / slotsPerHour) % 2 === 0 ? 'band-a' : 'band-b';
                     return (
                       <div
                         key={`time-axis-${slot}`}
-                        className={`time-axis-slot ${hourBand} ${isHour ? 'hour' : 'quarter'}`}
+                        className={`time-axis-slot ${hourBand} ${isHour ? 'hour' : 'quarter'} ${isHourBoundary ? 'hour-boundary' : ''}`}
                         style={{ height: SLOT_HEIGHT }}
                       >
                         {isHour && <span className="time-axis-label">{timeLabel(slot)}</span>}
@@ -1804,15 +3255,24 @@ function App() {
                       <span>{formatDayLabel(weekKey, dayIndex)}</span>
                     </div>
                     <div className="day-track" data-day-track={dayIndex}>
+                      {isToday && currentTimeLineTop !== null && (
+                        <div
+                          className="current-time-line"
+                          style={{ top: currentTimeLineTop }}
+                        >
+                          <span className="current-time-pill">{currentTimeLabel}</span>
+                        </div>
+                      )}
                       {Array.from({ length: TOTAL_SLOTS }).map((_, slot) => {
                         const isHour = slot % slotsPerHour === 0;
+                        const isHourBoundary = (slot + 1) % slotsPerHour === 0;
                         const hourBand = Math.floor(slot / slotsPerHour) % 2 === 0 ? 'band-a' : 'band-b';
                         const isDropTarget = dropTarget?.dayIndex === dayIndex && dropTarget.slot === slot;
                         return (
                           <div
                             key={slot}
                             data-drop-slot={`${dayIndex}:${slot}`}
-                            className={`time-slot ${isHour ? 'hour' : 'quarter'} ${hourBand} ${isDropTarget ? 'drop-target' : ''}`}
+                            className={`time-slot ${isHour ? 'hour' : 'quarter'} ${isHourBoundary ? 'hour-boundary' : ''} ${hourBand} ${isDropTarget ? 'drop-target' : ''}`}
                             style={{ height: SLOT_HEIGHT }}
                             onClick={() => void handleCreateTaskAtSlot(dayIndex, slot)}
                           >
@@ -1820,6 +3280,18 @@ function App() {
                           </div>
                         );
                       })}
+
+                      {tempoNonWorkSegments.length > 0 && (
+                        <div className="tempo-work-block-layer" aria-hidden="true">
+                          {tempoNonWorkSegments.map((segment) => (
+                            <div
+                              key={`${dayIndex}-${segment.key}`}
+                              className="tempo-work-block-band"
+                              style={{ top: segment.top, height: segment.height }}
+                            />
+                          ))}
+                        </div>
+                      )}
 
                       {dayTasks.map((task) => {
                         const top = (task.scheduled?.slot ?? 0) * SLOT_HEIGHT + SCHEDULED_CARD_TOP_OFFSET;
@@ -1835,7 +3307,7 @@ function App() {
                         return (
                           <div
                             key={task.id}
-                            className={`scheduled-task ${isSingleSlot ? 'single-slot' : ''} ${isHalfHourSlot ? 'half-hour-slot' : ''} ${hasPreviewShift ? 'preview-source' : ''}`}
+                            className={`scheduled-task ${renderedDuration > 30 ? 'two-line-title' : ''} ${isSingleSlot ? 'single-slot' : ''} ${isHalfHourSlot ? 'half-hour-slot' : ''} ${hasPreviewShift ? 'preview-source' : ''}`}
                             style={{
                               top,
                               height,
@@ -1857,6 +3329,7 @@ function App() {
                                 })
                               }
                               onHandlePointerDown={(event) => onTaskHandlePointerDown(task.id, event)}
+                              onRequestContextMenu={(event) => openTaskContextMenu(task.id, event)}
                               onResizeMouseDown={(event) => startTaskResize(task, event)}
                               resizable
                               isDragging={draggingTaskId === task.id}
@@ -1905,6 +3378,13 @@ function App() {
       {modalTask && (
         <TaskModal
           task={modalTask}
+          isRepeatingSeries={modalTaskHasValidRepeatParent}
+          clientSuggestions={clientSuggestions}
+          projectDeadlineByClient={projectDeadlineByClient}
+          projectValueByClient={projectValueByClient}
+          activeTaskCountByClient={activeTaskCountByClient}
+          onRemoveClientSuggestion={hideClientSuggestion}
+          onRestoreClientSuggestion={restoreClientSuggestion}
           onClose={() => setTaskInModal(null)}
           onDelete={() => {
             void handleDeleteTask(modalTask.id);
@@ -1912,6 +3392,181 @@ function App() {
           }}
           onSave={(patch, scope) => void patchTask(modalTask.id, patch, scope ?? 'single')}
         />
+      )}
+
+      {settingsOpen && (
+        <div className="modal-overlay" onClick={() => setSettingsOpen(false)}>
+          <section
+            className="task-modal settings-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Planner settings"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="task-modal-header">
+              <h3>Settings</h3>
+              <button type="button" onClick={() => setSettingsOpen(false)} className="icon-text-button">
+                <X size={16} />
+                <span>Close</span>
+              </button>
+            </header>
+
+            <div className="task-modal-body settings-modal-body">
+              <section className="modal-section settings-section">
+                <div className="settings-section-head">
+                  <div>
+                    <h4>Timezone</h4>
+                  </div>
+                </div>
+                <select
+                  value={settingsTimezoneDraft}
+                  onChange={(event) => setSettingsTimezoneDraft(event.target.value)}
+                >
+                  {supportedTimezones.map((timezone) => (
+                    <option key={timezone} value={timezone}>
+                      {timezone}
+                    </option>
+                  ))}
+                </select>
+              </section>
+
+              <section className="modal-section settings-section">
+                <div className="settings-section-head">
+                  <div>
+                    <h4>Work Blocks</h4>
+                    <p>Define the time windows that Tempo can schedule tasks within.</p>
+                  </div>
+                </div>
+
+                <div className="work-block-list">
+                  {settingsWorkBlocksDraft.map((block, index) => (
+                    <div key={`work-block-${block.start}-${block.end}-${index}`} className="inline-row work-block-display-row">
+                      <span className="work-block-display-text">
+                        {formatWorkBlockTime(block.start)} - {formatWorkBlockTime(block.end)}
+                      </span>
+                      <button
+                        type="button"
+                        className="link-icon-button work-block-remove"
+                        aria-label={`Remove work block ${index + 1}`}
+                        onClick={() => removeDraftWorkBlock(index)}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+
+                  <div className="work-block-entry-row">
+                    <input
+                      type="time"
+                      value={pendingWorkBlockStart}
+                      onChange={(event) => setPendingWorkBlockStart(event.target.value)}
+                    />
+                    <input
+                      type="time"
+                      value={pendingWorkBlockEnd}
+                      onChange={(event) => setPendingWorkBlockEnd(event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="link-icon-button"
+                      aria-label="Add work block"
+                      disabled={!pendingWorkBlockStart || !pendingWorkBlockEnd}
+                      onClick={addDraftWorkBlock}
+                    >
+                      <Plus size={14} />
+                    </button>
+                  </div>
+                </div>
+              </section>
+
+              <section className="modal-section settings-section">
+                <div className="settings-section-head">
+                  <div>
+                    <h4>Change Password</h4>
+                  </div>
+                </div>
+                <div className="settings-field-stack">
+                  <label>
+                    New password
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      value={settingsPasswordDraft}
+                      onChange={(event) => setSettingsPasswordDraft(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Confirm new password
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      value={settingsPasswordConfirmDraft}
+                      onChange={(event) => setSettingsPasswordConfirmDraft(event.target.value)}
+                    />
+                  </label>
+                  <div className="settings-action-row">
+                    <button
+                      type="button"
+                      className="success"
+                      disabled={!settingsPasswordDraft || !settingsPasswordConfirmDraft || saving}
+                      onClick={() => void handleChangePassword()}
+                    >
+                      Update Password
+                    </button>
+                  </div>
+                </div>
+              </section>
+
+              <section className="modal-section settings-section danger-section">
+                <div className="settings-section-head">
+                  <div>
+                    <h4>Delete Account</h4>
+                    <p>This permanently deletes your account and all planner data.</p>
+                  </div>
+                </div>
+                <div className="settings-field-stack">
+                  <label>
+                    Type DELETE to confirm
+                    <input
+                      value={deleteAccountConfirmDraft}
+                      onChange={(event) => setDeleteAccountConfirmDraft(event.target.value)}
+                    />
+                  </label>
+                  <div className="settings-action-row">
+                    <button
+                      type="button"
+                      className="danger"
+                      disabled={deleteAccountConfirmDraft.trim() !== 'DELETE' || saving}
+                      onClick={() => void handleDeleteAccount()}
+                    >
+                      Delete Account
+                    </button>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <footer className="task-modal-footer">
+              <button type="button" onClick={() => setSettingsOpen(false)}>Cancel</button>
+              <button type="button" className="success" onClick={() => void handleSaveSettings()}>
+                Save Settings
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+
+      {taskContextMenu && (
+        <div
+          className="task-context-menu"
+          data-task-context-menu
+          style={{ left: taskContextMenu.x, top: taskContextMenu.y }}
+        >
+          <button type="button" onClick={() => void handleDuplicateTask(taskContextMenu.taskId)}>
+            <Copy size={14} />
+            <span>Duplicate Task</span>
+          </button>
+        </div>
       )}
 
       {mobileSlotPicker && viewMode === 'plan' && (

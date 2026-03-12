@@ -1,6 +1,8 @@
 create table if not exists public.profiles (
   user_id uuid primary key references auth.users(id) on delete cascade,
   selected_week_start text not null,
+  timezone text not null default '',
+  work_blocks jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
 );
@@ -9,9 +11,14 @@ create table if not exists public.tasks (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   title text not null,
+  client text not null default '',
+  activity text not null default '',
+  planning_source text,
+  project_value text not null default '',
   completed boolean not null default false,
   duration integer not null default 30,
   due_date date,
+  project_deadline date,
   urgent boolean not null default false,
   important boolean not null default false,
   notes text not null default '',
@@ -60,8 +67,29 @@ add column if not exists backlog_order text[] not null default '{}';
 alter table public.profiles
 add column if not exists kanban_order text[] not null default '{}';
 
+alter table public.profiles
+add column if not exists timezone text not null default '';
+
+alter table public.profiles
+add column if not exists work_blocks jsonb not null default '[]'::jsonb;
+
 alter table public.tasks
 add column if not exists repeat_config jsonb;
 
 alter table public.tasks
 add column if not exists repeat_parent_id uuid;
+
+alter table public.tasks
+add column if not exists client text not null default '';
+
+alter table public.tasks
+add column if not exists activity text not null default '';
+
+alter table public.tasks
+add column if not exists planning_source text;
+
+alter table public.tasks
+add column if not exists project_value text not null default '';
+
+alter table public.tasks
+add column if not exists project_deadline date;

@@ -1,14 +1,19 @@
 import { nowWeekStartKey } from './dateTime';
 import { supabase } from './supabase';
-import { localTimezone, type Task, type TaskRepeat } from '../types';
+import { localTimezone, type Task, type TaskRepeat, type WorkBlock } from '../types';
 
 type TaskRow = {
   id: string;
   user_id: string;
   title: string;
+  client: string | null;
+  activity: Task['activity'] | 'Meet' | null;
+  planning_source: Task['planningSource'] | null;
+  project_value: string | null;
   completed: boolean;
   duration: number;
   due_date: string | null;
+  project_deadline: string | null;
   urgent: boolean;
   important: boolean;
   notes: string;
@@ -27,6 +32,8 @@ type ProfileRow = {
   selected_week_start: string;
   backlog_order?: string[] | null;
   kanban_order?: string[] | null;
+  timezone?: string | null;
+  work_blocks?: WorkBlock[] | null;
 };
 
 function requireClient() {
@@ -46,13 +53,90 @@ function isMissingRepeatColumns(error: { code?: string; message?: string } | nul
   );
 }
 
+function buildMissingRepeatColumnsError() {
+  return new Error(
+    'Recurring tasks need the `repeat_config` and `repeat_parent_id` columns in Supabase. Run the tasks migration SQL, then try again.',
+  );
+}
+
+function stripMissingRepeatColumns<T extends Record<string, unknown>>(
+  payload: T,
+  error: { code?: string; message?: string } | null | undefined,
+): T {
+  if (!error || !isMissingRepeatColumns(error)) return payload;
+  const message = (error.message ?? '').toLowerCase();
+  const nextPayload = { ...payload };
+  const stripAll = error.code === '42703' && !message.includes('repeat_config') && !message.includes('repeat_parent_id');
+  if (stripAll || message.includes('repeat_config')) delete nextPayload.repeat_config;
+  if (stripAll || message.includes('repeat_parent_id')) delete nextPayload.repeat_parent_id;
+  return nextPayload;
+}
+
+type MissingTaskDetailColumns = {
+  client: boolean;
+  activity: boolean;
+  planningSource: boolean;
+  projectDeadline: boolean;
+  projectValue: boolean;
+};
+
+function getMissingTaskDetailColumns(error: { code?: string; message?: string } | null | undefined): MissingTaskDetailColumns | null {
+  if (!error) return null;
+  const message = (error.message ?? '').toLowerCase();
+  const matched = {
+    client: message.includes('client'),
+    activity: message.includes('activity'),
+    planningSource: message.includes('planning_source'),
+    projectDeadline: message.includes('project_deadline'),
+    projectValue: message.includes('project_value'),
+  };
+
+  if (Object.values(matched).some(Boolean)) return matched;
+  if (error.code !== '42703') return null;
+
+  return {
+    client: true,
+    activity: true,
+    planningSource: true,
+    projectDeadline: true,
+    projectValue: true,
+  };
+}
+
+function isMissingTaskDetailColumns(error: { code?: string; message?: string } | null | undefined) {
+  return Boolean(getMissingTaskDetailColumns(error));
+}
+
+function isMissingProfileSettingsColumns(error: { code?: string; message?: string } | null | undefined) {
+  if (!error) return false;
+  const message = (error.message ?? '').toLowerCase();
+  return error.code === '42703' || message.includes('timezone') || message.includes('work_blocks');
+}
+
+function normalizeWorkBlocks(value: unknown): WorkBlock[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry): entry is { start?: unknown; end?: unknown } => Boolean(entry) && typeof entry === 'object')
+    .map((entry) => ({
+      start: typeof entry.start === 'string' ? entry.start : '',
+      end: typeof entry.end === 'string' ? entry.end : '',
+    }))
+    .filter((block) => block.start && block.end);
+}
+
 function rowToTask(row: TaskRow): Task {
+  const normalizedActivity = row.activity === 'Meet' ? 'Outreach' : (row.activity ?? '');
   return {
     id: row.id,
     title: row.title,
+    client: row.client ?? '',
+    activity: normalizedActivity,
+    planningSource: row.planning_source ?? undefined,
+    projectValue: row.project_value ?? '',
     completed: row.completed,
     duration: row.duration as Task['duration'],
     dueDate: row.due_date ?? '',
+    projectDeadline: row.project_deadline ?? '',
     urgent: row.urgent,
     important: row.important,
     notes: row.notes,
@@ -67,13 +151,78 @@ function rowToTask(row: TaskRow): Task {
   };
 }
 
+function applyTaskDetailFallback(
+  task: Task,
+  fallback: {
+    client?: string | null;
+    activity?: Task['activity'] | null;
+    planningSource?: Task['planningSource'] | null;
+    projectDeadline?: string | null;
+    projectValue?: string | null;
+  },
+): Task {
+  const nextTask = { ...task };
+  if ('client' in fallback) nextTask.client = fallback.client ?? '';
+  if ('activity' in fallback) nextTask.activity = fallback.activity ?? '';
+  if ('planningSource' in fallback) nextTask.planningSource = fallback.planningSource ?? undefined;
+  if ('projectDeadline' in fallback) nextTask.projectDeadline = fallback.projectDeadline ?? '';
+  if ('projectValue' in fallback) nextTask.projectValue = fallback.projectValue ?? '';
+  return nextTask;
+}
+
+function stripMissingTaskDetailColumns<T extends Record<string, unknown>>(
+  payload: T,
+  missingColumns: MissingTaskDetailColumns | null,
+): T {
+  if (!missingColumns) return payload;
+  const nextPayload = { ...payload };
+  if (missingColumns.client) delete nextPayload.client;
+  if (missingColumns.activity) delete nextPayload.activity;
+  if (missingColumns.planningSource) delete nextPayload.planning_source;
+  if (missingColumns.projectDeadline) delete nextPayload.project_deadline;
+  if (missingColumns.projectValue) delete nextPayload.project_value;
+  return nextPayload;
+}
+
+function pickStrippedTaskDetailFallback(
+  missingColumns: MissingTaskDetailColumns | null,
+  values: {
+    client?: string | null;
+    activity?: Task['activity'] | null;
+    planningSource?: Task['planningSource'] | null;
+    projectDeadline?: string | null;
+    projectValue?: string | null;
+  },
+) {
+  const fallback: {
+    client?: string | null;
+    activity?: Task['activity'] | null;
+    planningSource?: Task['planningSource'] | null;
+    projectDeadline?: string | null;
+    projectValue?: string | null;
+  } = {};
+
+  if (missingColumns?.client) fallback.client = values.client ?? null;
+  if (missingColumns?.activity) fallback.activity = values.activity ?? null;
+  if (missingColumns?.planningSource) fallback.planningSource = values.planningSource ?? null;
+  if (missingColumns?.projectDeadline) fallback.projectDeadline = values.projectDeadline ?? null;
+  if (missingColumns?.projectValue) fallback.projectValue = values.projectValue ?? null;
+
+  return fallback;
+}
+
 function taskPatchToRowPatch(patch: Partial<Task>) {
   const rowPatch: Record<string, unknown> = {};
 
   if (patch.title !== undefined) rowPatch.title = patch.title;
+  if (patch.client !== undefined) rowPatch.client = patch.client;
+  if (patch.activity !== undefined) rowPatch.activity = patch.activity;
+  if ('planningSource' in patch) rowPatch.planning_source = patch.planningSource ?? null;
+  if (patch.projectValue !== undefined) rowPatch.project_value = patch.projectValue || null;
   if (patch.completed !== undefined) rowPatch.completed = patch.completed;
   if (patch.duration !== undefined) rowPatch.duration = patch.duration;
   if (patch.dueDate !== undefined) rowPatch.due_date = patch.dueDate || null;
+  if (patch.projectDeadline !== undefined) rowPatch.project_deadline = patch.projectDeadline || null;
   if (patch.urgent !== undefined) rowPatch.urgent = patch.urgent;
   if (patch.important !== undefined) rowPatch.important = patch.important;
   if (patch.notes !== undefined) rowPatch.notes = patch.notes;
@@ -109,9 +258,9 @@ export async function getSessionUser() {
   return data.user;
 }
 
-export function onAuthStateChange(callback: () => void) {
+export function onAuthStateChange(callback: (event: string) => void) {
   const client = requireClient();
-  const { data } = client.auth.onAuthStateChange(() => callback());
+  const { data } = client.auth.onAuthStateChange((event) => callback(event));
   return () => data.subscription.unsubscribe();
 }
 
@@ -144,67 +293,63 @@ export async function signOut() {
   if (error) throw error;
 }
 
+export async function changePassword(password: string) {
+  const client = requireClient();
+  const { error } = await client.auth.updateUser({ password });
+  if (error) throw error;
+}
+
+export async function deleteAccount() {
+  const client = requireClient();
+  const {
+    data: { session },
+    error: sessionError,
+  } = await client.auth.getSession();
+  if (sessionError) throw sessionError;
+  if (!session?.access_token) {
+    throw new Error('No active session found.');
+  }
+
+  const response = await fetch('/api/delete-account', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
+  });
+
+  const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+  if (!response.ok) {
+    throw new Error(payload?.error ?? 'Failed to delete account.');
+  }
+
+  await client.auth.signOut().catch(() => undefined);
+}
+
 export async function loadPlannerData(userId: string) {
   const client = requireClient();
 
-  let profileData: ProfileRow | null = null;
-  let supportsBacklogOrder = true;
-  let supportsKanbanOrder = true;
-
-  const withOrders = await client
+  const { data: profileData, error: profileError } = await client
     .from('profiles')
-    .select('user_id, selected_week_start, backlog_order, kanban_order')
+    .select('*')
     .eq('user_id', userId)
     .maybeSingle();
 
-  if (withOrders.error) {
-    const missingColumn =
-      withOrders.error.code === '42703' ||
-      withOrders.error.message.toLowerCase().includes('backlog_order') ||
-      withOrders.error.message.toLowerCase().includes('kanban_order');
-
-    if (!missingColumn) throw withOrders.error;
-
-    supportsKanbanOrder = false;
-    const fallback = await client
-      .from('profiles')
-      .select('user_id, selected_week_start, backlog_order')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    if (fallback.error) {
-      const missingBacklog =
-        fallback.error.code === '42703' || fallback.error.message.toLowerCase().includes('backlog_order');
-
-      if (!missingBacklog) throw fallback.error;
-
-      supportsBacklogOrder = false;
-      const legacyFallback = await client
-        .from('profiles')
-        .select('user_id, selected_week_start')
-        .eq('user_id', userId)
-        .maybeSingle();
-
-      if (legacyFallback.error) throw legacyFallback.error;
-      profileData = legacyFallback.data as ProfileRow | null;
-    } else {
-      profileData = fallback.data as ProfileRow | null;
-    }
-  } else {
-    profileData = withOrders.data as ProfileRow | null;
-  }
+  if (profileError) throw profileError;
 
   const selectedWeekStart = profileData?.selected_week_start ?? nowWeekStartKey();
-  const backlogOrder = supportsBacklogOrder ? profileData?.backlog_order ?? [] : [];
-  const kanbanOrder = supportsKanbanOrder ? profileData?.kanban_order ?? [] : [];
+  const backlogOrder = Array.isArray(profileData?.backlog_order) ? profileData.backlog_order : [];
+  const kanbanOrder = Array.isArray(profileData?.kanban_order) ? profileData.kanban_order : [];
+  const timezone =
+    typeof profileData?.timezone === 'string' && profileData.timezone.trim()
+      ? profileData.timezone
+      : localTimezone();
+  const workBlocks = normalizeWorkBlocks(profileData?.work_blocks);
 
   if (!profileData) {
-    const payload: ProfileRow = {
+    const payload = {
       user_id: userId,
       selected_week_start: selectedWeekStart,
-    };
-    if (supportsBacklogOrder) payload.backlog_order = [];
-    if (supportsKanbanOrder) payload.kanban_order = [];
+    } satisfies Pick<ProfileRow, 'user_id' | 'selected_week_start'>;
 
     const { error: upsertError } = await client.from('profiles').upsert(payload);
 
@@ -221,7 +366,7 @@ export async function loadPlannerData(userId: string) {
 
   const tasks = ((taskRows ?? []) as TaskRow[]).map(rowToTask);
 
-  return { selectedWeekStart, backlogOrder, kanbanOrder, tasks };
+  return { selectedWeekStart, backlogOrder, kanbanOrder, timezone, workBlocks, tasks };
 }
 
 export async function updateSelectedWeekStart(userId: string, selectedWeekStart: string, backlogOrder: string[]) {
@@ -265,6 +410,38 @@ export async function updateKanbanOrder(userId: string, kanbanOrder: string[], s
   }
 }
 
+export async function updateUserSettings(
+  userId: string,
+  settings: { timezone: string; workBlocks: WorkBlock[] },
+  selectedWeekStart: string,
+) {
+  const client = requireClient();
+  const payload = {
+    user_id: userId,
+    selected_week_start: selectedWeekStart,
+    timezone: settings.timezone,
+    work_blocks: settings.workBlocks,
+  } satisfies ProfileRow;
+
+  let { error } = await client.from('profiles').upsert(payload);
+
+  if (error && isMissingProfileSettingsColumns(error)) {
+    const message = error.message.toLowerCase();
+    const retryPayload: Record<string, unknown> = {
+      user_id: userId,
+      selected_week_start: selectedWeekStart,
+    };
+
+    if (!message.includes('timezone')) retryPayload.timezone = settings.timezone;
+    if (!message.includes('work_blocks')) retryPayload.work_blocks = settings.workBlocks;
+
+    const retry = await client.from('profiles').upsert(retryPayload);
+    error = retry.error;
+  }
+
+  if (error) throw error;
+}
+
 export async function createTask(userId: string, title: string): Promise<Task> {
   const client = requireClient();
 
@@ -278,9 +455,14 @@ export async function createTask(userId: string, title: string): Promise<Task> {
     id,
     user_id: userId,
     title,
+    client: '',
+    activity: '' as Task['activity'],
+    planning_source: null as Task['planningSource'] | null,
+    project_value: null,
     completed: false,
     duration: 60,
     due_date: null,
+    project_deadline: null,
     urgent: false,
     important: false,
     notes: '',
@@ -292,21 +474,44 @@ export async function createTask(userId: string, title: string): Promise<Task> {
     updated_at: now,
   };
 
+  const insertRow = {
+    ...baseRow,
+    repeat_config: null,
+    repeat_parent_id: null,
+  };
+
   let { data, error } = await client
     .from('tasks')
-    .insert({
-      ...baseRow,
-      repeat_config: null,
-      repeat_parent_id: null,
-    })
+    .insert(insertRow)
     .select('*')
     .single();
 
   // Backward-compatible path: allow task creation before repeat columns are migrated.
-  if (error && isMissingRepeatColumns(error)) {
-    const retry = await client.from('tasks').insert(baseRow).select('*').single();
+  if (error && (isMissingRepeatColumns(error) || isMissingTaskDetailColumns(error))) {
+    const missingTaskDetailColumns = getMissingTaskDetailColumns(error);
+    let retryRow: Record<string, unknown> = stripMissingTaskDetailColumns(insertRow, missingTaskDetailColumns);
+    if (isMissingRepeatColumns(error)) {
+      const { repeat_config: _repeatConfig, repeat_parent_id: _repeatParentId, ...legacyRetryRow } = retryRow;
+      retryRow = legacyRetryRow;
+    }
+    const retry = await client.from('tasks').insert(retryRow).select('*').single();
     data = retry.data;
     error = retry.error;
+    if (!error) {
+      const task = rowToTask(data as TaskRow);
+      return missingTaskDetailColumns
+        ? applyTaskDetailFallback(
+            task,
+            pickStrippedTaskDetailFallback(missingTaskDetailColumns, {
+              client: insertRow.client,
+              activity: insertRow.activity,
+              planningSource: insertRow.planning_source,
+              projectDeadline: insertRow.project_deadline,
+              projectValue: insertRow.project_value,
+            }),
+          )
+        : task;
+    }
   }
 
   if (error) throw error;
@@ -315,14 +520,49 @@ export async function createTask(userId: string, title: string): Promise<Task> {
 
 export async function updateTask(userId: string, taskId: string, patch: Partial<Task>): Promise<Task> {
   const client = requireClient();
+  const rowPatch: Record<string, unknown> = { ...taskPatchToRowPatch(patch), updated_at: new Date().toISOString() };
+  const touchesRepeatColumns =
+    Object.prototype.hasOwnProperty.call(patch, 'repeat') || Object.prototype.hasOwnProperty.call(patch, 'repeatParentId');
 
-  const { data, error } = await client
+  let { data, error } = await client
     .from('tasks')
-    .update({ ...taskPatchToRowPatch(patch), updated_at: new Date().toISOString() })
+    .update(rowPatch)
     .eq('user_id', userId)
     .eq('id', taskId)
     .select('*')
     .single();
+
+  if (error && (isMissingTaskDetailColumns(error) || isMissingRepeatColumns(error))) {
+    if (touchesRepeatColumns && isMissingRepeatColumns(error)) {
+      throw buildMissingRepeatColumnsError();
+    }
+    const missingTaskDetailColumns = getMissingTaskDetailColumns(error);
+    const legacyRowPatch = stripMissingRepeatColumns(
+      stripMissingTaskDetailColumns(rowPatch, missingTaskDetailColumns),
+      error,
+    );
+    const retry = await client
+      .from('tasks')
+      .update(legacyRowPatch)
+      .eq('user_id', userId)
+      .eq('id', taskId)
+      .select('*')
+      .single();
+    data = retry.data;
+    error = retry.error;
+    if (!error) {
+      return applyTaskDetailFallback(
+        rowToTask(data as TaskRow),
+        pickStrippedTaskDetailFallback(missingTaskDetailColumns, {
+          client: patch.client,
+          activity: patch.activity,
+          planningSource: 'planningSource' in patch ? (patch.planningSource ?? null) : undefined,
+          projectDeadline: patch.projectDeadline,
+          projectValue: patch.projectValue,
+        }),
+      );
+    }
+  }
 
   if (error) throw error;
   return rowToTask(data as TaskRow);
@@ -336,30 +576,64 @@ export async function createRepeatTemplate(userId: string, source: Task, repeat:
       ? crypto.randomUUID()
       : randomUuidFallback();
 
+  const insertRow = {
+    id,
+    user_id: userId,
+    title: source.title,
+    client: source.client,
+    activity: source.activity,
+    planning_source: null,
+    project_value: source.projectValue || null,
+    completed: false,
+    duration: source.duration,
+    due_date: source.dueDate || null,
+    project_deadline: source.projectDeadline || null,
+    urgent: source.urgent,
+    important: source.important,
+    notes: source.notes,
+    links: source.links,
+    attachments: source.attachments,
+    status: source.status === 'Done' ? 'Not Started' : source.status,
+    scheduled: null,
+    repeat_config: repeat,
+    repeat_parent_id: null,
+    created_at: now,
+    updated_at: now,
+  };
+
   const { data, error } = await client
     .from('tasks')
-    .insert({
-      id,
-      user_id: userId,
-      title: source.title,
-      completed: false,
-      duration: source.duration,
-      due_date: source.dueDate || null,
-      urgent: source.urgent,
-      important: source.important,
-      notes: source.notes,
-      links: source.links,
-      attachments: source.attachments,
-      status: source.status === 'Done' ? 'Not Started' : source.status,
-      scheduled: null,
-      repeat_config: repeat,
-      repeat_parent_id: null,
-      created_at: now,
-      updated_at: now,
-    })
+    .insert(insertRow)
     .select('*')
     .single();
 
+  if (error && isMissingRepeatColumns(error)) {
+    throw buildMissingRepeatColumnsError();
+  }
+
+  if (error && isMissingTaskDetailColumns(error)) {
+    const missingTaskDetailColumns = getMissingTaskDetailColumns(error);
+    let retryRow: Record<string, unknown> = stripMissingTaskDetailColumns(insertRow, missingTaskDetailColumns);
+    const retry = await client
+      .from('tasks')
+      .insert(retryRow)
+      .select('*')
+      .single();
+    if (retry.error) throw retry.error;
+    const task = rowToTask(retry.data as TaskRow);
+    return missingTaskDetailColumns
+      ? applyTaskDetailFallback(
+          task,
+          pickStrippedTaskDetailFallback(missingTaskDetailColumns, {
+            client: insertRow.client,
+            activity: insertRow.activity,
+            planningSource: insertRow.planning_source,
+            projectDeadline: insertRow.project_deadline,
+            projectValue: insertRow.project_value,
+          }),
+        )
+      : task;
+  }
   if (error) throw error;
   return rowToTask(data as TaskRow);
 }
@@ -371,7 +645,7 @@ export async function ensureRepeatingTasksForWeek(userId: string, weekKey: strin
   if (templates.length === 0) return [];
 
   const now = new Date().toISOString();
-  const createdRows: TaskRow[] = [];
+  const createdTasks: Task[] = [];
 
   for (const template of templates) {
     const repeat = template.repeat;
@@ -381,12 +655,30 @@ export async function ensureRepeatingTasksForWeek(userId: string, weekKey: strin
       (task) => task.repeatParentId === template.id && task.scheduled?.weekKey === weekKey,
     );
 
-    const targetCount = repeat.days.length;
+    const compareRepeatPosition = (leftDayIndex: number, rightWeekKey: string, rightDayIndex: number) => {
+      if (weekKey !== rightWeekKey) return weekKey.localeCompare(rightWeekKey);
+      return leftDayIndex - rightDayIndex;
+    };
+    const eligibleDays = repeat.days
+      .filter((day) => day >= 0 && day <= 6)
+      .filter((day) => {
+        if (repeat.startWeekKey && Number.isFinite(repeat.startDayIndex)) {
+          return compareRepeatPosition(day, repeat.startWeekKey, repeat.startDayIndex as number) >= 0;
+        }
+        return true;
+      })
+      .filter((day) => {
+        if (repeat.endWeekKey && Number.isFinite(repeat.endDayIndex)) {
+          return compareRepeatPosition(day, repeat.endWeekKey, repeat.endDayIndex as number) < 0;
+        }
+        return true;
+      });
+
+    const targetCount = eligibleDays.length;
     if (existingInstances.length >= targetCount) continue;
 
     const existingDaySet = new Set(existingInstances.map((task) => task.scheduled?.dayIndex).filter(Number.isFinite));
-    const daysToCreate = repeat.days
-      .filter((day) => day >= 0 && day <= 6)
+    const daysToCreate = eligibleDays
       .filter((day) => !existingDaySet.has(day))
       .slice(0, targetCount - existingInstances.length);
 
@@ -398,9 +690,14 @@ export async function ensureRepeatingTasksForWeek(userId: string, weekKey: strin
       return {
         user_id: userId,
         title: template.title,
+        client: template.client,
+        activity: template.activity,
+        planning_source: null,
+        project_value: template.projectValue || null,
         completed: false,
         duration: template.duration,
         due_date: template.dueDate || null,
+        project_deadline: template.projectDeadline || null,
         urgent: template.urgent,
         important: template.important,
         notes: template.notes,
@@ -420,12 +717,41 @@ export async function ensureRepeatingTasksForWeek(userId: string, weekKey: strin
       };
     });
 
-    const { data, error } = await client.from('tasks').insert(rowsToInsert).select('*');
+    let usedLegacyRows = false;
+    let missingTaskDetailColumns: MissingTaskDetailColumns | null = null;
+    let { data, error } = await client.from('tasks').insert(rowsToInsert).select('*');
+    if (error && isMissingRepeatColumns(error)) {
+      throw buildMissingRepeatColumnsError();
+    }
+    if (error && isMissingTaskDetailColumns(error)) {
+      missingTaskDetailColumns = getMissingTaskDetailColumns(error);
+      let legacyRows: Record<string, unknown>[] = rowsToInsert.map((row) =>
+        stripMissingTaskDetailColumns(row, missingTaskDetailColumns),
+      );
+      const retry = await client.from('tasks').insert(legacyRows).select('*');
+      data = retry.data;
+      error = retry.error;
+      usedLegacyRows = !retry.error;
+    }
     if (error) throw error;
-    createdRows.push(...((data ?? []) as TaskRow[]));
+    const nextTasks = ((data ?? []) as TaskRow[]).map((row, index) =>
+      usedLegacyRows
+        ? applyTaskDetailFallback(
+            rowToTask(row),
+            pickStrippedTaskDetailFallback(missingTaskDetailColumns, {
+              client: rowsToInsert[index].client,
+              activity: rowsToInsert[index].activity,
+              planningSource: rowsToInsert[index].planning_source,
+              projectDeadline: rowsToInsert[index].project_deadline,
+              projectValue: rowsToInsert[index].project_value,
+            }),
+          )
+        : rowToTask(row),
+    );
+    createdTasks.push(...nextTasks);
   }
 
-  return createdRows.map(rowToTask);
+  return createdTasks;
 }
 
 export async function deleteTask(userId: string, taskId: string) {

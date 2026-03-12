@@ -1,6 +1,7 @@
 export type ViewMode = 'plan' | 'kanban';
 
 export type TaskStatus = 'Not Started' | 'In Progress' | 'Blocked' | 'In Review' | 'Done';
+export type TaskActivity = 'Script' | 'Prep' | 'Shoot' | 'Edit' | 'Outreach' | 'Admin' | 'Personal';
 export type Duration = number;
 
 export type Attachment = {
@@ -25,14 +26,27 @@ export type TaskRepeat = {
   sameTimeEveryDay?: boolean;
   daySlots?: Partial<Record<number, number>>;
   timezone: string;
+  startWeekKey?: string;
+  startDayIndex?: number;
+  endWeekKey?: string;
+  endDayIndex?: number;
+};
+
+export type WorkBlock = {
+  start: string;
+  end: string;
 };
 
 export type Task = {
   id: string;
   title: string;
+  client: string;
+  activity: TaskActivity | '';
+  projectValue: string;
   completed: boolean;
   duration: Duration;
   dueDate: string;
+  projectDeadline: string;
   urgent: boolean;
   important: boolean;
   notes: string;
@@ -40,6 +54,7 @@ export type Task = {
   attachments: Attachment[];
   status: TaskStatus;
   scheduled?: TaskSchedule;
+  planningSource?: 'tempo';
   repeat?: TaskRepeat;
   repeatParentId?: string;
   createdAt: string;
@@ -49,6 +64,7 @@ export type Task = {
 export const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
 export const STATUS_ORDER: TaskStatus[] = ['Not Started', 'Blocked', 'In Progress', 'In Review', 'Done'];
+export const ACTIVITY_OPTIONS: TaskActivity[] = ['Script', 'Prep', 'Shoot', 'Edit', 'Outreach', 'Admin', 'Personal'];
 
 export const DURATIONS: Duration[] = Array.from({ length: 15 }, (_, index) => (index + 2) * 15);
 
