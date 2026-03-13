@@ -446,6 +446,7 @@ function App() {
   const [savingDotCount, setSavingDotCount] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTempoHelpOpen, setSettingsTempoHelpOpen] = useState(false);
   const [settingsTimezoneDraft, setSettingsTimezoneDraft] = useState(localTimezone());
   const [settingsWorkBlocksDraft, setSettingsWorkBlocksDraft] = useState<WorkBlock[]>([]);
   const [pendingWorkBlockStart, setPendingWorkBlockStart] = useState('');
@@ -493,8 +494,10 @@ function App() {
   const timelineAreaRef = useRef<HTMLElement | null>(null);
   const timeAxisRef = useRef<HTMLDivElement | null>(null);
   const mobileSwipeRef = useRef<MobileSwipeGesture | null>(null);
-  const headerHeroRef = useRef<HTMLElement | null>(null);
-  const stickyPlanningBarRef = useRef<HTMLElement | null>(null);
+  const headerCollapseLockedRef = useRef(false);
+  const headerResetToTopRef = useRef(false);
+  const headerResetTimeoutRef = useRef<number | null>(null);
+  const settingsTempoSignalsRef = useRef<HTMLDivElement | null>(null);
   const hiddenClientSuggestionsStorageKey = `${CLIENT_SUGGESTIONS_STORAGE_KEY_PREFIX}${userId ?? 'guest'}`;
 
   const weekKey = selectedWeekStart;
@@ -1054,22 +1057,53 @@ function App() {
   }, [taskContextMenu]);
 
   useEffect(() => {
-    const updateHeaderCollapsed = () => {
-      const hero = headerHeroRef.current;
-      const stickyBar = stickyPlanningBarRef.current;
-      if (!hero || !stickyBar) return;
-      const heroRect = hero.getBoundingClientRect();
-      const stickyHeight = stickyBar.getBoundingClientRect().height;
-      const next = heroRect.bottom <= stickyHeight + 4;
-      setHeaderCollapsed((current) => (current === next ? current : next));
+    if (!settingsTempoHelpOpen) return;
+
+    const dismiss = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (settingsTempoSignalsRef.current?.contains(target)) return;
+      setSettingsTempoHelpOpen(false);
     };
 
-    updateHeaderCollapsed();
+    window.addEventListener('pointerdown', dismiss);
+    return () => window.removeEventListener('pointerdown', dismiss);
+  }, [settingsTempoHelpOpen]);
+
+  useEffect(() => {
+    const collapseThreshold = 36;
+    const updateHeaderCollapsed = () => {
+      const scrollTop = window.scrollY || window.pageYOffset || 0;
+
+      if (headerResetToTopRef.current) {
+        if (scrollTop <= 2) {
+          headerResetToTopRef.current = false;
+          headerCollapseLockedRef.current = false;
+          setHeaderCollapsed(false);
+        }
+        return;
+      }
+
+      if (headerCollapseLockedRef.current) {
+        setHeaderCollapsed((current) => (current ? current : true));
+        return;
+      }
+
+      if (scrollTop > collapseThreshold) {
+        headerCollapseLockedRef.current = true;
+        setHeaderCollapsed(true);
+        return;
+      }
+
+      setHeaderCollapsed(false);
+    };
+
     window.addEventListener('scroll', updateHeaderCollapsed, { passive: true });
-    window.addEventListener('resize', updateHeaderCollapsed);
     return () => {
       window.removeEventListener('scroll', updateHeaderCollapsed);
-      window.removeEventListener('resize', updateHeaderCollapsed);
+      if (headerResetTimeoutRef.current) {
+        window.clearTimeout(headerResetTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -2413,6 +2447,30 @@ function App() {
     }
   }
 
+  function handleExpandHeaderFromOwl() {
+    headerResetToTopRef.current = true;
+    headerCollapseLockedRef.current = false;
+    setHeaderCollapsed(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    if (headerResetTimeoutRef.current) {
+      window.clearTimeout(headerResetTimeoutRef.current);
+    }
+
+    headerResetTimeoutRef.current = window.setTimeout(() => {
+      if (!headerResetToTopRef.current) return;
+      headerResetToTopRef.current = false;
+      const scrollTop = window.scrollY || window.pageYOffset || 0;
+      if (scrollTop <= 2) {
+        headerCollapseLockedRef.current = false;
+        setHeaderCollapsed(false);
+        return;
+      }
+      headerCollapseLockedRef.current = true;
+      setHeaderCollapsed(true);
+    }, 1200);
+  }
+
   async function handlePlanMyWeek() {
     if (!userId) return;
 
@@ -2427,7 +2485,7 @@ function App() {
     if (workBlocks.length === 0) {
       setTempoPlanNotice({
         tone: 'warning',
-        text: 'Tempo needs at least one saved work block before it can build your week.',
+        text: 'Set up at least one work block in settings before Tempo can plan your week.',
       });
       return;
     }
@@ -2772,6 +2830,7 @@ function App() {
   }
 
   function openSettingsModal() {
+    setSettingsTempoHelpOpen(false);
     setSettingsTimezoneDraft(profileTimezone);
     setSettingsWorkBlocksDraft(sortWorkBlocks(workBlocks.map((block) => ({ ...block }))));
     setPendingWorkBlockStart('');
@@ -3074,7 +3133,7 @@ function App() {
 
   return (
     <div className={`planner-shell grain-bg view-${viewMode} ${headerCollapsed ? 'header-collapsed' : ''}`}>
-      <section className="header-hero" ref={headerHeroRef}>
+      <section className="header-hero">
         <header className="top-bar">
           <div className="header-brand" aria-hidden="true">
             <img className="header-title-icon" src="/img/tempo-icon.png" alt="" />
@@ -3104,12 +3163,20 @@ function App() {
         </section>
       </section>
 
-      <section className="sticky-planning-bar" ref={stickyPlanningBarRef}>
+      <section className="sticky-planning-bar">
         <div className="top-controls">
           <div className="week-nav-row">
-            <span className="week-nav-owl-wrap" aria-hidden="true">
+            <button
+              type="button"
+              className="week-nav-owl-wrap week-nav-owl-button"
+              onClick={handleExpandHeaderFromOwl}
+              aria-label="Back to top and expand header"
+              title="Back to top and expand header"
+              disabled={!headerCollapsed}
+              tabIndex={headerCollapsed ? 0 : -1}
+            >
               <img className="week-nav-owl" src="/img/tempo-icon.png" alt="" />
-            </span>
+            </button>
             <button className="icon-text-button" aria-label="Previous week" onClick={() => void changeSelectedWeek(addWeeks(weekKey, -1))}>
               <ChevronLeft size={15} />
             </button>
@@ -3123,9 +3190,17 @@ function App() {
             </button>
           </div>
           <div className="mobile-day-nav-inline">
-            <span className="mobile-nav-owl-wrap" aria-hidden="true">
+            <button
+              type="button"
+              className="mobile-nav-owl-wrap mobile-nav-owl-button"
+              onClick={handleExpandHeaderFromOwl}
+              aria-label="Back to top and expand header"
+              title="Back to top and expand header"
+              disabled={!headerCollapsed}
+              tabIndex={headerCollapsed ? 0 : -1}
+            >
               <img className="mobile-nav-owl" src="/img/tempo-icon.png" alt="" />
-            </span>
+            </button>
             <button
               className="icon-text-button"
               aria-label="Previous day"
@@ -3592,11 +3667,30 @@ function App() {
                 </select>
               </section>
 
-              <section className="modal-section settings-section">
+              <section className="modal-section settings-section settings-tempo-section">
                 <div className="settings-section-head">
                   <div>
                     <h4>Work Blocks</h4>
                     <p>Define the time windows that Tempo can schedule tasks within.</p>
+                  </div>
+                  <div className="settings-tempo-help" ref={settingsTempoSignalsRef}>
+                    <button
+                      type="button"
+                      className={`tempo-chip tempo-signal-button settings-tempo-chip icon-only ${settingsTempoHelpOpen ? 'open' : ''}`}
+                      aria-label={settingsTempoHelpOpen ? 'Hide Tempo work-block help' : 'Show Tempo work-block help'}
+                      aria-expanded={settingsTempoHelpOpen}
+                      onClick={() => setSettingsTempoHelpOpen((current) => !current)}
+                    >
+                      <Sparkles size={13} />
+                    </button>
+                    {settingsTempoHelpOpen && (
+                      <div className="tempo-help-tooltip settings-tempo-tooltip" role="note">
+                        <p>
+                          Tempo will only schedule your tasks during these blocks. You can still manually schedule
+                          tasks outside of these times.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </div>
 

@@ -720,13 +720,12 @@ export function TaskModal({
           <div className="tempo-priority-toolbar" ref={prioritySignalsRef}>
             <button
               type="button"
-              className={`tempo-chip tempo-signal-button ${tempoHelpOpen ? 'open' : ''}`}
+              className={`tempo-chip tempo-signal-button icon-only ${tempoHelpOpen ? 'open' : ''}`}
               aria-label={tempoHelpOpen ? 'Hide how Tempo uses these fields' : 'Show how Tempo uses these fields'}
               aria-expanded={tempoHelpOpen}
               onClick={() => setTempoHelpOpen((current) => !current)}
             >
               <Sparkles size={12} />
-              <span>Priority Signals</span>
             </button>
 
             {tempoHelpOpen && (
