@@ -1,4 +1,4 @@
-import { type MouseEvent, type PointerEvent } from 'react';
+import { type CSSProperties, type MouseEvent, type PointerEvent } from 'react';
 import { CalendarCheck, FileText, FolderClock, FolderHeart, GripVertical, Link2, Paperclip, Repeat2, Sparkles } from 'lucide-react';
 import { type Task } from '../types';
 
@@ -86,10 +86,12 @@ export function TaskCard({
   const isRepeating = Boolean(task.repeat?.enabled || task.repeatParentId);
   const isTempoPlanned = task.planningSource === 'tempo' && Boolean(task.scheduled);
   const due = task.dueDate ? duePill(task.dueDate) : null;
+  const transitionStyle = { viewTransitionName: `task-${task.id}` } as CSSProperties;
 
   return (
     <article
       className={`task-card ${statusClass(task.status)} ${task.completed ? 'done' : ''} ${compact ? 'compact' : ''} ${isDragging ? 'drag-origin' : ''}`}
+      style={transitionStyle}
       onContextMenu={onRequestContextMenu}
     >
       <div

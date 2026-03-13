@@ -8,7 +8,22 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Calendar, CalendarCheck, CalendarDays, Check, ChevronLeft, ChevronRight, Columns3, Copy, Plus, Sparkles, X } from 'lucide-react';
+import { flushSync } from 'react-dom';
+import {
+  Calendar,
+  CalendarCheck,
+  CalendarDays,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Columns3,
+  Copy,
+  ListRestart,
+  Plus,
+  Sparkles,
+  Undo2,
+  X,
+} from 'lucide-react';
 import { TaskCard } from './components/TaskCard';
 import { TaskModal } from './components/TaskModal';
 import {
@@ -83,6 +98,9 @@ type MobileSwipeGesture = {
   startY: number;
   lastX: number;
   axis: SwipeAxis;
+};
+type ViewTransitionDocument = Document & {
+  startViewTransition?: (updateCallback: () => void) => { finished: Promise<void> };
 };
 const MOBILE_DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 const KANBAN_DAY_NAMES = ['Mon', 'Tues', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
@@ -229,6 +247,11 @@ function parseProjectValueAmount(value: string) {
 }
 
 function getEffectiveDeadline(task: Task) {
+  const dueDate = parseDateKey(task.dueDate);
+  const projectDeadline = parseDateKey(task.projectDeadline);
+  if (dueDate && projectDeadline) {
+    return dueDate.getTime() <= projectDeadline.getTime() ? task.dueDate : task.projectDeadline;
+  }
   return task.dueDate || task.projectDeadline || '';
 }
 
@@ -276,6 +299,13 @@ function getTempoRangePreference(task: Task, range: TempoWorkRange) {
     return 3;
   }
 
+  if (task.activity === 'Outreach') {
+    if (range.blockType === 'early') return 0;
+    if (range.blockType === 'daylight') return 1;
+    if (range.blockType === 'late') return 2;
+    return 3;
+  }
+
   if (range.blockType === 'daylight') return 0;
   if (range.blockType === 'early') return 1;
   if (range.blockType === 'late') return 2;
@@ -310,6 +340,7 @@ function getTempoPriorityScore(task: Task, weekStartKey: string) {
   if (task.client.trim()) score += 5;
   if (task.activity === 'Admin') score -= 18;
   if (task.activity === 'Personal') score -= 24;
+  if (task.activity === 'Outreach') score -= 12;
 
   return score;
 }
@@ -317,14 +348,6 @@ function getTempoPriorityScore(task: Task, weekStartKey: string) {
 function getTempoDeadlineSortValue(task: Task) {
   const deadline = parseDateKey(getEffectiveDeadline(task));
   return deadline?.getTime() ?? Number.MAX_SAFE_INTEGER;
-}
-
-function getTempoStatusSortValue(status: TaskStatus) {
-  if (status === 'In Progress') return 0;
-  if (status === 'In Review') return 1;
-  if (status === 'Not Started') return 2;
-  if (status === 'Blocked') return 3;
-  return 4;
 }
 
 function getTempoProjectStatusSortValue(tasks: Task[]) {
@@ -462,6 +485,7 @@ function App() {
   const [hiddenClientSuggestions, setHiddenClientSuggestions] = useState<string[]>([]);
   const [loadedHiddenClientSuggestionsKey, setLoadedHiddenClientSuggestionsKey] = useState<string | null>(null);
   const draggingTaskIdRef = useRef<string | null>(null);
+  const taskInModalRef = useRef<string | null>(null);
   const dayHeaderRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const dayColumnRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const timelineGridRef = useRef<HTMLDivElement | null>(null);
@@ -611,7 +635,6 @@ function App() {
         if (task.scheduled) return false;
         if (task.repeatParentId) return false;
         if (isRepeatTemplate(task)) return false;
-        if (task.activity === 'Outreach') return false;
         return task.duration > 0;
       }),
     [tasks],
@@ -668,6 +691,19 @@ function App() {
       });
     return values;
   }, [tasks]);
+  const projectPriorityByClient = useMemo(() => {
+    const priorities: Record<string, { urgent: boolean; important: boolean }> = {};
+    tasks.forEach((task) => {
+      const clientKey = normalizeClientKey(task.client);
+      if (!clientKey) return;
+      const current = priorities[clientKey] ?? { urgent: false, important: false };
+      priorities[clientKey] = {
+        urgent: current.urgent || Boolean(task.urgent),
+        important: current.important || Boolean(task.important),
+      };
+    });
+    return priorities;
+  }, [tasks]);
   const activeTaskCountByClient = useMemo(() => {
     const counts: Record<string, number> = {};
     tasks.forEach((task) => {
@@ -704,7 +740,7 @@ function App() {
     }
     return {
       tone: 'neutral',
-      text: 'Tempo fills only future open time inside your saved work blocks and leaves manually placed outreach tasks alone.',
+      text: '',
     };
   }, [tempoPlanNotice, tempoPlannableTasks.length, tempoPlanningStartDay, workBlocks.length]);
 
@@ -824,8 +860,9 @@ function App() {
     resetMobileSwipe();
   }
 
-  async function refreshPlannerData(nextUserId: string) {
-    setLoadingPlanner(true);
+  async function refreshPlannerData(nextUserId: string, options?: { foreground?: boolean }) {
+    const foreground = options?.foreground ?? false;
+    if (foreground) setLoadingPlanner(true);
     try {
       const data = await loadPlannerData(nextUserId);
       setTasks(data.tasks);
@@ -842,13 +879,36 @@ function App() {
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to load planner data.');
     } finally {
-      setLoadingPlanner(false);
+      if (foreground) setLoadingPlanner(false);
     }
+  }
+
+  function runTaskTransition(update: () => void) {
+    if (typeof document === 'undefined') {
+      update();
+      return;
+    }
+
+    const transitionDocument = document as ViewTransitionDocument;
+    if (typeof transitionDocument.startViewTransition !== 'function') {
+      update();
+      return;
+    }
+
+    transitionDocument.startViewTransition(() => {
+      flushSync(() => {
+        update();
+      });
+    });
   }
 
   useEffect(() => {
     draggingTaskIdRef.current = draggingTaskId;
   }, [draggingTaskId]);
+
+  useEffect(() => {
+    taskInModalRef.current = taskInModal;
+  }, [taskInModal]);
 
   useEffect(() => {
     setTempoPlanNotice(null);
@@ -1025,7 +1085,7 @@ function App() {
         if (user) {
           setUserId(user.id);
           setUserEmail(user.email ?? '');
-          await refreshPlannerData(user.id);
+          await refreshPlannerData(user.id, { foreground: true });
         }
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : 'Failed to initialize auth.');
@@ -1039,7 +1099,7 @@ function App() {
     const unsubscribe = onAuthStateChange((event) => {
       void (async () => {
         try {
-          if (event === 'TOKEN_REFRESHED') return;
+          if (event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') return;
           const user = await getSessionUser();
           if (!user) {
             setUserId(null);
@@ -1060,7 +1120,7 @@ function App() {
 
           setUserId(user.id);
           setUserEmail(user.email ?? '');
-          if (taskInModal) return;
+          if (taskInModalRef.current) return;
           await refreshPlannerData(user.id);
         } catch (error) {
           setErrorMessage(error instanceof Error ? error.message : 'Failed to refresh session.');
@@ -1069,7 +1129,7 @@ function App() {
     });
 
     return unsubscribe;
-  }, [taskInModal]);
+  }, []);
 
   useEffect(() => {
     if (taskInModal) return;
@@ -1843,6 +1903,25 @@ function App() {
     return { ...patch, projectValue: inheritedProjectValue };
   }
 
+  function inheritProjectPriorityForBrand(patch: Partial<Task>, currentTask?: Task) {
+    const hasClientPatch = Object.prototype.hasOwnProperty.call(patch, 'client');
+    const hasUrgentPatch = Object.prototype.hasOwnProperty.call(patch, 'urgent');
+    const hasImportantPatch = Object.prototype.hasOwnProperty.call(patch, 'important');
+    if (!hasClientPatch && !hasUrgentPatch && !hasImportantPatch) return patch;
+
+    const nextClient = hasClientPatch ? patch.client ?? '' : currentTask?.client ?? '';
+    const projectKey = normalizeClientKey(nextClient);
+    if (!projectKey) return patch;
+
+    const inheritedPriority = projectPriorityByClient[projectKey];
+    if (!inheritedPriority) return patch;
+
+    const nextPatch = { ...patch };
+    if (!hasUrgentPatch) nextPatch.urgent = inheritedPriority.urgent;
+    if (!hasImportantPatch) nextPatch.important = inheritedPriority.important;
+    return nextPatch;
+  }
+
   function getProjectDeadlinePropagation(taskId: string, patch: Partial<Task>, currentTask?: Task) {
     if (!Object.prototype.hasOwnProperty.call(patch, 'projectDeadline')) return null;
 
@@ -1880,6 +1959,31 @@ function App() {
     return {
       taskIds: [...taskIds],
       projectValue: nextProjectValue,
+    };
+  }
+
+  function getProjectPriorityPropagation(taskId: string, patch: Partial<Task>, currentTask?: Task) {
+    const hasUrgentPatch = Object.prototype.hasOwnProperty.call(patch, 'urgent');
+    const hasImportantPatch = Object.prototype.hasOwnProperty.call(patch, 'important');
+    if (!hasUrgentPatch && !hasImportantPatch) return null;
+
+    const nextClient = Object.prototype.hasOwnProperty.call(patch, 'client') ? patch.client ?? '' : currentTask?.client ?? '';
+    const projectKey = normalizeClientKey(nextClient);
+    if (!projectKey) return null;
+
+    const nextUrgent = hasUrgentPatch ? Boolean(patch.urgent) : Boolean(currentTask?.urgent);
+    const nextImportant = hasImportantPatch ? Boolean(patch.important) : Boolean(currentTask?.important);
+    const relatedTasks = tasks.filter((task) => normalizeClientKey(task.client) === projectKey);
+    const taskIds = new Set(relatedTasks.map((task) => task.id));
+    taskIds.add(taskId);
+    const hasMismatch = relatedTasks.some((task) => task.urgent !== nextUrgent || task.important !== nextImportant);
+    const currentTaskMatches = Boolean(currentTask?.urgent) === nextUrgent && Boolean(currentTask?.important) === nextImportant;
+    if (!hasMismatch && currentTaskMatches) return null;
+
+    return {
+      taskIds: [...taskIds],
+      urgent: nextUrgent,
+      important: nextImportant,
     };
   }
 
@@ -1927,6 +2031,28 @@ function App() {
     return nextUpdatesById;
   }
 
+  async function applyProjectPriorityPropagation(
+    propagation: { taskIds: string[]; urgent: boolean; important: boolean } | null,
+    updatesById?: Map<string, Task>,
+  ) {
+    const nextUpdatesById = updatesById ? new Map(updatesById) : new Map<string, Task>();
+    if (!propagation || !userId) return nextUpdatesById;
+
+    const taskIdsToUpdate = propagation.taskIds.filter((id) => {
+      const currentTask = nextUpdatesById.get(id) ?? taskById.get(id);
+      return Boolean(currentTask?.urgent) !== propagation.urgent || Boolean(currentTask?.important) !== propagation.important;
+    });
+
+    if (taskIdsToUpdate.length === 0) return nextUpdatesById;
+
+    const propagatedTasks = await Promise.all(
+      taskIdsToUpdate.map((id) => updateTask(userId, id, { urgent: propagation.urgent, important: propagation.important })),
+    );
+
+    propagatedTasks.forEach((task) => nextUpdatesById.set(task.id, task));
+    return nextUpdatesById;
+  }
+
   async function patchTask(taskId: string, patch: Partial<Task>, updateScope: 'single' | 'future' = 'single') {
     if (!userId) return;
 
@@ -1934,8 +2060,10 @@ function App() {
     const currentTaskHasValidRepeatParent = hasValidRepeatParent(currentTask, taskById);
     patch = inheritProjectDeadlineForBrand(patch, currentTask);
     patch = inheritProjectValueForBrand(patch, currentTask);
+    patch = inheritProjectPriorityForBrand(patch, currentTask);
     const projectDeadlinePropagation = getProjectDeadlinePropagation(taskId, patch, currentTask);
     const projectValuePropagation = getProjectValuePropagation(taskId, patch, currentTask);
+    const projectPriorityPropagation = getProjectPriorityPropagation(taskId, patch, currentTask);
     let hasRepeatPatch = Object.prototype.hasOwnProperty.call(patch, 'repeat');
     const repeatPatch = hasRepeatPatch ? patch.repeat : undefined;
     if (currentTask?.repeatParentId && currentTaskHasValidRepeatParent && hasRepeatPatch && !repeatPatch?.enabled) {
@@ -2049,6 +2177,7 @@ function App() {
 
         updatesById = await applyProjectDeadlinePropagation(projectDeadlinePropagation, updatesById);
         updatesById = await applyProjectValuePropagation(projectValuePropagation, updatesById);
+        updatesById = await applyProjectPriorityPropagation(projectPriorityPropagation, updatesById);
 
         setTasks((current) => {
           const next = current
@@ -2132,6 +2261,7 @@ function App() {
 
         updatesById = await applyProjectDeadlinePropagation(projectDeadlinePropagation, updatesById);
         updatesById = await applyProjectValuePropagation(projectValuePropagation, updatesById);
+        updatesById = await applyProjectPriorityPropagation(projectPriorityPropagation, updatesById);
 
         setTasks((current) => {
           const next = current.map((task) => {
@@ -2201,6 +2331,7 @@ function App() {
         let updatedById = new Map(updates.map((task) => [task.id, task]));
         updatedById = await applyProjectDeadlinePropagation(projectDeadlinePropagation, updatedById);
         updatedById = await applyProjectValuePropagation(projectValuePropagation, updatedById);
+        updatedById = await applyProjectPriorityPropagation(projectPriorityPropagation, updatedById);
         setTasks((current) =>
           current.map((task) => {
             const updatedTask = updatedById.get(task.id);
@@ -2224,6 +2355,7 @@ function App() {
       let updatedById = new Map([[nextTask.id, nextTask]]);
       updatedById = await applyProjectDeadlinePropagation(projectDeadlinePropagation, updatedById);
       updatedById = await applyProjectValuePropagation(projectValuePropagation, updatedById);
+      updatedById = await applyProjectPriorityPropagation(projectPriorityPropagation, updatedById);
       setTasks((current) =>
         current.map((task) => {
           const updatedTask = updatedById.get(task.id);
@@ -2333,6 +2465,10 @@ function App() {
       .map(([projectKey, projectTasks]) => ({
         projectKey,
         projectPriorityScore: getTempoProjectPriorityScore(projectTasks, weekKey),
+        earliestDeadlineSortValue: projectTasks.reduce<number>((currentEarliest, task) => {
+          const deadlineTime = parseDateKey(getEffectiveDeadline(task))?.getTime() ?? Number.MAX_SAFE_INTEGER;
+          return Math.min(currentEarliest, deadlineTime);
+        }, Number.MAX_SAFE_INTEGER),
         oldestCreatedAt: projectTasks.reduce(
           (currentOldest, task) =>
             currentOldest.localeCompare(task.createdAt) <= 0 ? currentOldest : task.createdAt,
@@ -2347,23 +2483,13 @@ function App() {
           const titleDiff = naturalTitleCollator.compare(a.title, b.title);
           if (titleDiff !== 0) return titleDiff;
 
-          const scoreDiff = getTempoPriorityScore(b, weekKey) - getTempoPriorityScore(a, weekKey);
-          if (scoreDiff !== 0) return scoreDiff;
-
-          const deadlineDiff = getTempoDeadlineSortValue(a) - getTempoDeadlineSortValue(b);
-          if (deadlineDiff !== 0) return deadlineDiff;
-
-          const statusDiff = getTempoStatusSortValue(a.status) - getTempoStatusSortValue(b.status);
-          if (statusDiff !== 0) return statusDiff;
-
-          const projectValueDiff = parseProjectValueAmount(b.projectValue) - parseProjectValueAmount(a.projectValue);
-          if (projectValueDiff !== 0) return projectValueDiff;
-
-          if (a.duration !== b.duration) return a.duration - b.duration;
           return a.createdAt.localeCompare(b.createdAt);
         }),
       }))
       .sort((a, b) => {
+        const deadlineDiff = a.earliestDeadlineSortValue - b.earliestDeadlineSortValue;
+        if (deadlineDiff !== 0) return deadlineDiff;
+
         const scoreDiff = b.projectPriorityScore - a.projectPriorityScore;
         if (scoreDiff !== 0) return scoreDiff;
 
@@ -2376,57 +2502,56 @@ function App() {
         return a.oldestCreatedAt.localeCompare(b.oldestCreatedAt);
       });
 
-    const orderedTasks: Task[] = [];
-    let hasRemainingProjectTasks = true;
-    while (hasRemainingProjectTasks) {
-      hasRemainingProjectTasks = false;
-      orderedProjectQueues.forEach((projectQueue) => {
-        const nextTask = projectQueue.tasks.shift();
-        if (!nextTask) return;
-        orderedTasks.push(nextTask);
-        hasRemainingProjectTasks = true;
-      });
-    }
+    const orderedTasks = orderedProjectQueues.flatMap((projectQueue) =>
+      projectQueue.tasks.map((task) => ({ task, projectKey: projectQueue.projectKey })),
+    );
 
     const plannedEntries: Array<{ taskId: string; dayIndex: number; slot: number }> = [];
     const unscheduledCountByTaskId = new Set<string>();
-    const shootCountByDay = Array.from({ length: DAY_NAMES.length }, () => 0);
+    const nextEarliestByProject = new Map<string, { dayIndex: number; slot: number }>();
+    const weekStartDate = parseDateKey(weekKey);
 
-    weekTasks.forEach((task) => {
-      if (task.activity !== 'Shoot') return;
-      const dayIndex = task.scheduled?.dayIndex;
-      if (!Number.isFinite(dayIndex)) return;
-      shootCountByDay[dayIndex as number] += 1;
-    });
-
-    orderedTasks.forEach((task) => {
+    function tryPlaceTask(
+      task: Task,
+      projectKey: string,
+      mode: 'primary' | 'backfill',
+    ) {
       const neededSlots = durationToSlots(task.duration);
-      let placed = false;
+      const earliestPlacement = nextEarliestByProject.get(projectKey);
+      const startDayIndex = Math.max(tempoPlanningStartDay, earliestPlacement?.dayIndex ?? tempoPlanningStartDay);
+      const taskDeadline = parseDateKey(getEffectiveDeadline(task));
+      const latestDayIndex = weekStartDate && taskDeadline
+        ? Math.min(DAY_NAMES.length - 1, differenceInCalendarDays(weekStartDate, taskDeadline))
+        : DAY_NAMES.length - 1;
 
-      for (let dayIndex = tempoPlanningStartDay; dayIndex < DAY_NAMES.length && !placed; dayIndex += 1) {
-        if (task.activity === 'Shoot' && shootCountByDay[dayIndex] >= 2) continue;
+      if (latestDayIndex < 0 || startDayIndex > latestDayIndex) {
+        return false;
+      }
 
+      for (let dayIndex = startDayIndex; dayIndex <= latestDayIndex; dayIndex += 1) {
         const candidateRanges = [...tempoWorkRangesByDay[dayIndex]]
           .map((range) => ({ ...range, preference: getTempoRangePreference(task, range) }))
           .filter((range) => Number.isFinite(range.preference))
-          .sort((a, b) => a.preference - b.preference || a.startSlot - b.startSlot);
+          .sort((a, b) =>
+            mode === 'backfill'
+              ? a.startSlot - b.startSlot || a.preference - b.preference
+              : a.preference - b.preference || a.startSlot - b.startSlot,
+          );
 
         for (const range of candidateRanges) {
+          const earliestSlotInRange =
+            earliestPlacement && dayIndex === earliestPlacement.dayIndex ? earliestPlacement.slot : 0;
+          const rangeStart = Math.max(range.startSlot, earliestSlotInRange);
           const latestStart = range.endSlot - neededSlots;
-          if (latestStart < range.startSlot) continue;
+          if (latestStart < rangeStart) continue;
 
-          for (let slot = range.startSlot; slot <= latestStart; slot += 1) {
+          for (let slot = rangeStart; slot <= latestStart; slot += 1) {
             let canFit = true;
-            if (slot > 0 && occupied[dayIndex][slot - 1]) canFit = false;
             for (let cursor = slot; cursor < slot + neededSlots; cursor += 1) {
               if (occupied[dayIndex][cursor]) {
                 canFit = false;
                 break;
               }
-            }
-            if (canFit) {
-              const nextSlot = slot + neededSlots;
-              if (nextSlot < TOTAL_SLOTS && occupied[dayIndex][nextSlot]) canFit = false;
             }
 
             if (!canFit) continue;
@@ -2435,14 +2560,36 @@ function App() {
               occupied[dayIndex][cursor] = true;
             }
             plannedEntries.push({ taskId: task.id, dayIndex, slot });
-            if (task.activity === 'Shoot') shootCountByDay[dayIndex] += 1;
-            placed = true;
-            break;
+            const nextSlot = slot + neededSlots;
+            if (nextSlot >= TOTAL_SLOTS) {
+              nextEarliestByProject.set(projectKey, { dayIndex: dayIndex + 1, slot: 0 });
+            } else {
+              nextEarliestByProject.set(projectKey, { dayIndex, slot: nextSlot });
+            }
+            return true;
           }
         }
       }
 
-      if (!placed) unscheduledCountByTaskId.add(task.id);
+      return false;
+    }
+
+    const primaryTasks = orderedTasks.filter(({ task }) => task.activity !== 'Outreach');
+    const backfillQueue: Array<{ task: Task; projectKey: string }> = [];
+
+    primaryTasks.forEach(({ task, projectKey }) => {
+      if (!tryPlaceTask(task, projectKey, 'primary')) {
+        backfillQueue.push({ task, projectKey });
+      }
+    });
+
+    const outreachTasks = orderedTasks.filter(({ task }) => task.activity === 'Outreach');
+    const secondPassTasks = [...backfillQueue, ...outreachTasks];
+
+    secondPassTasks.forEach(({ task, projectKey }) => {
+      if (!tryPlaceTask(task, projectKey, 'backfill')) {
+        unscheduledCountByTaskId.add(task.id);
+      }
     });
 
     const patchByTaskId = new Map(
@@ -2478,13 +2625,15 @@ function App() {
         ),
       );
       const updatedById = new Map(updatedTasks.map((task) => [task.id, task]));
-      setTasks((current) =>
-        current.map((task) => {
-          const updatedTask = updatedById.get(task.id);
-          if (!updatedTask) return task;
-          return mergeTaskDetails(updatedTask, task, patchByTaskId.get(task.id));
-        }),
-      );
+      runTaskTransition(() => {
+        setTasks((current) =>
+          current.map((task) => {
+            const updatedTask = updatedById.get(task.id);
+            if (!updatedTask) return task;
+            return mergeTaskDetails(updatedTask, task, patchByTaskId.get(task.id));
+          }),
+        );
+      });
       setTempoUndoEntries(undoEntries);
       setTempoPlanNotice({
         tone: unscheduledCountByTaskId.size > 0 ? 'warning' : 'neutral',
@@ -2548,13 +2697,15 @@ function App() {
         ),
       );
       const updatedById = new Map(updatedTasks.map((task) => [task.id, task]));
-      setTasks((current) =>
-        current.map((task) => {
-          const updatedTask = updatedById.get(task.id);
-          if (!updatedTask) return task;
-          return mergeTaskDetails(updatedTask, task, patchByTaskId.get(task.id));
-        }),
-      );
+      runTaskTransition(() => {
+        setTasks((current) =>
+          current.map((task) => {
+            const updatedTask = updatedById.get(task.id);
+            if (!updatedTask) return task;
+            return mergeTaskDetails(updatedTask, task, patchByTaskId.get(task.id));
+          }),
+        );
+      });
       const skippedCount = tempoUndoEntries.length - undoableEntries.length;
       setTempoUndoEntries([]);
       setTempoPlanNotice({
@@ -2594,13 +2745,15 @@ function App() {
         ),
       );
       const updatedById = new Map(updatedTasks.map((task) => [task.id, task]));
-      setTasks((current) =>
-        current.map((task) => {
-          const updatedTask = updatedById.get(task.id);
-          if (!updatedTask) return task;
-          return mergeTaskDetails(updatedTask, task, patchByTaskId.get(task.id));
-        }),
-      );
+      runTaskTransition(() => {
+        setTasks((current) =>
+          current.map((task) => {
+            const updatedTask = updatedById.get(task.id);
+            if (!updatedTask) return task;
+            return mergeTaskDetails(updatedTask, task, patchByTaskId.get(task.id));
+          }),
+        );
+      });
 
       const movedIds = tasksToMove.map((task) => task.id);
       const nextBacklogOrder = [...movedIds, ...backlogOrder.filter((id) => !movedIds.includes(id))];
@@ -2811,7 +2964,7 @@ function App() {
     );
   }
 
-  if (initializing || loadingPlanner) {
+  if (initializing) {
     return (
       <div className="login-shell login-shell-grain">
         <main className="login-card">
@@ -2940,6 +3093,8 @@ function App() {
             <span className="status-text status-saving">
               Saving<span className="status-dots">{'.'.repeat(savingDotCount + 1)}</span>
             </span>
+          ) : loadingPlanner ? (
+            <span className="status-text status-saving">Syncing planner</span>
           ) : (
             <span className="status-text status-saved">
               <Check size={13} aria-hidden="true" />
@@ -2997,6 +3152,39 @@ function App() {
               <CalendarCheck size={15} />
             </button>
           </div>
+          <div className="tempo-cta-group">
+            <div className="tempo-plan-action-row">
+              <button
+                className="icon-text-button tempo-primary-button tempo-plan-button"
+                onClick={() => void handlePlanMyWeek()}
+                disabled={saving || tempoPlanning}
+              >
+                <Sparkles size={15} />
+                <span>{tempoPlanning ? 'Planning...' : 'Plan My Week'}</span>
+              </button>
+              <div className="tempo-link-row">
+                <button
+                  className="icon-text-button tempo-undo-button"
+                  onClick={() => void handleUndoTempoPlan()}
+                  disabled={saving || tempoPlanning || tempoUndoEntries.length === 0}
+                  data-tooltip="Undo last Tempo run"
+                  aria-label="Undo last Tempo run"
+                >
+                  <Undo2 size={15} />
+                </button>
+                <button
+                  className="icon-text-button tempo-undo-button"
+                  onClick={() => void handleMoveUnfinishedWeekTasksToBacklog()}
+                  disabled={saving || tempoPlanning || unfinishedWeekTasks.length === 0}
+                  data-tooltip="Move all unscheduled tasks to backlog"
+                  aria-label="Move all unscheduled tasks to backlog"
+                >
+                  <ListRestart size={15} />
+                </button>
+              </div>
+            </div>
+            {tempoPlanHint.text && <p className={`tempo-plan-note ${tempoPlanHint.tone}`}>{tempoPlanHint.text}</p>}
+          </div>
           <div className="view-toggle" role="tablist" aria-label="View mode">
             <button
               className={`icon-text-button view-toggle-button ${viewMode === 'plan' ? 'active' : ''}`}
@@ -3016,33 +3204,6 @@ function App() {
             >
               <Columns3 size={15} />
             </button>
-          </div>
-          <div className="tempo-cta-group">
-            <button
-              className="icon-text-button tempo-primary-button tempo-plan-button"
-              onClick={() => void handlePlanMyWeek()}
-              disabled={saving || tempoPlanning}
-            >
-              <Sparkles size={15} />
-              <span>{tempoPlanning ? 'Planning...' : 'Plan My Week'}</span>
-            </button>
-            <div className="tempo-link-row">
-              <button
-                className="tempo-undo-button"
-                onClick={() => void handleUndoTempoPlan()}
-                disabled={saving || tempoPlanning || tempoUndoEntries.length === 0}
-              >
-                Undo last Tempo run
-              </button>
-              <button
-                className="tempo-undo-button"
-                onClick={() => void handleMoveUnfinishedWeekTasksToBacklog()}
-                disabled={saving || tempoPlanning || unfinishedWeekTasks.length === 0}
-              >
-                Move unfinished tasks to backlog
-              </button>
-            </div>
-            <p className={`tempo-plan-note ${tempoPlanHint.tone}`}>{tempoPlanHint.text}</p>
           </div>
         </div>
 
@@ -3382,6 +3543,7 @@ function App() {
           clientSuggestions={clientSuggestions}
           projectDeadlineByClient={projectDeadlineByClient}
           projectValueByClient={projectValueByClient}
+          projectPriorityByClient={projectPriorityByClient}
           activeTaskCountByClient={activeTaskCountByClient}
           onRemoveClientSuggestion={hideClientSuggestion}
           onRestoreClientSuggestion={restoreClientSuggestion}

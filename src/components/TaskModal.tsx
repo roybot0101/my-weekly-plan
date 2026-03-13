@@ -36,6 +36,7 @@ type TaskModalProps = {
   clientSuggestions: string[];
   projectDeadlineByClient: Record<string, string>;
   projectValueByClient: Record<string, string>;
+  projectPriorityByClient: Record<string, { urgent: boolean; important: boolean }>;
   activeTaskCountByClient: Record<string, number>;
   onRemoveClientSuggestion: (client: string) => void;
   onRestoreClientSuggestion: (client: string) => void;
@@ -58,6 +59,14 @@ type ProjectValueConfirmationState = {
   nextStep: SaveFlowStep;
   projectName: string;
   projectValue: string;
+};
+
+type ProjectPriorityConfirmationState = {
+  savePatch: Partial<Task>;
+  nextStep: SaveFlowStep;
+  projectName: string;
+  urgent: boolean;
+  important: boolean;
 };
 
 function normalizeClientKey(value: string) {
@@ -83,6 +92,7 @@ export function TaskModal({
   clientSuggestions,
   projectDeadlineByClient,
   projectValueByClient,
+  projectPriorityByClient,
   activeTaskCountByClient,
   onRemoveClientSuggestion,
   onRestoreClientSuggestion,
@@ -94,6 +104,7 @@ export function TaskModal({
   const [draft, setDraft] = useState<Task>(task);
   const [projectDeadlineTouched, setProjectDeadlineTouched] = useState(false);
   const [projectValueTouched, setProjectValueTouched] = useState(false);
+  const [projectPriorityTouched, setProjectPriorityTouched] = useState(false);
   const [clientSuggestionsOpen, setClientSuggestionsOpen] = useState(false);
   const [scheduleDate, setScheduleDate] = useState(task.scheduled ? scheduledDateKey(task.scheduled.weekKey, task.scheduled.dayIndex) : '');
   const [scheduleTime, setScheduleTime] = useState(task.scheduled ? slotToTimeValue(task.scheduled.slot) : '');
@@ -122,6 +133,7 @@ export function TaskModal({
   });
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
   const clientAutocompleteRef = useRef<HTMLDivElement | null>(null);
+  const prioritySignalsRef = useRef<HTMLDivElement | null>(null);
   const clientInputRef = useRef<HTMLInputElement | null>(null);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const didFocusTitleRef = useRef(false);
@@ -129,9 +141,12 @@ export function TaskModal({
   const [projectDeadlineConfirmation, setProjectDeadlineConfirmation] =
     useState<ProjectDeadlineConfirmationState | null>(null);
   const [projectValueConfirmation, setProjectValueConfirmation] = useState<ProjectValueConfirmationState | null>(null);
+  const [projectPriorityConfirmation, setProjectPriorityConfirmation] =
+    useState<ProjectPriorityConfirmationState | null>(null);
   const [repeatScheduleNoticeOpen, setRepeatScheduleNoticeOpen] = useState(false);
   const [confirmedProjectDeadlineKey, setConfirmedProjectDeadlineKey] = useState<string | null>(null);
   const [confirmedProjectValueKey, setConfirmedProjectValueKey] = useState<string | null>(null);
+  const [confirmedProjectPriorityKey, setConfirmedProjectPriorityKey] = useState<string | null>(null);
   const [tempoHelpOpen, setTempoHelpOpen] = useState(false);
   const allDaysSelected = repeatDays.length === 7;
   const canConfigureRepeatFromCurrentTask = Boolean(task.scheduled || isRepeatingSeries || repeatEnabled);
@@ -168,10 +183,13 @@ export function TaskModal({
   useEffect(() => {
     setProjectDeadlineTouched(false);
     setProjectValueTouched(false);
+    setProjectPriorityTouched(false);
     setConfirmedProjectDeadlineKey(null);
     setConfirmedProjectValueKey(null);
+    setConfirmedProjectPriorityKey(null);
     setProjectDeadlineConfirmation(null);
     setProjectValueConfirmation(null);
+    setProjectPriorityConfirmation(null);
     setRepeatScheduleNoticeOpen(false);
     setTempoHelpOpen(false);
   }, [task.id]);
@@ -189,6 +207,20 @@ export function TaskModal({
     window.addEventListener('pointerdown', onPointerDown);
     return () => window.removeEventListener('pointerdown', onPointerDown);
   }, [clientSuggestionsOpen]);
+
+  useEffect(() => {
+    if (!tempoHelpOpen) return;
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (prioritySignalsRef.current?.contains(target)) return;
+      setTempoHelpOpen(false);
+    };
+
+    window.addEventListener('pointerdown', onPointerDown);
+    return () => window.removeEventListener('pointerdown', onPointerDown);
+  }, [tempoHelpOpen]);
 
   function removeLink(index: number) {
     setDraft({ ...draft, links: draft.links.filter((_, i) => i !== index) });
@@ -274,19 +306,30 @@ export function TaskModal({
     return projectValueByClient[normalizeClientKey(client)] ?? '';
   }
 
+  function lookupProjectPriority(client: string) {
+    return projectPriorityByClient[normalizeClientKey(client)] ?? { urgent: false, important: false };
+  }
+
   function handleClientChange(value: string) {
     setConfirmedProjectDeadlineKey(null);
     setConfirmedProjectValueKey(null);
+    setConfirmedProjectPriorityKey(null);
     setDraft((prev) => {
       const previousInheritedDeadline = lookupProjectDeadline(prev.client);
       const previousInheritedProjectValue = lookupProjectValue(prev.client);
+      const previousInheritedProjectPriority = lookupProjectPriority(prev.client);
       const shouldSyncProjectDeadline = !prev.projectDeadline || prev.projectDeadline === previousInheritedDeadline;
       const shouldSyncProjectValue = !prev.projectValue || prev.projectValue === previousInheritedProjectValue;
+      const shouldSyncUrgent = !projectPriorityTouched || prev.urgent === previousInheritedProjectPriority.urgent;
+      const shouldSyncImportant = !projectPriorityTouched || prev.important === previousInheritedProjectPriority.important;
+      const nextInheritedProjectPriority = lookupProjectPriority(value);
       return {
         ...prev,
         client: value,
         projectDeadline: shouldSyncProjectDeadline ? lookupProjectDeadline(value) : prev.projectDeadline,
         projectValue: shouldSyncProjectValue ? lookupProjectValue(value) : prev.projectValue,
+        urgent: shouldSyncUrgent ? nextInheritedProjectPriority.urgent : prev.urgent,
+        important: shouldSyncImportant ? nextInheritedProjectPriority.important : prev.important,
       };
     });
   }
@@ -327,12 +370,12 @@ export function TaskModal({
       duration: draft.duration,
       dueDate: draft.dueDate,
       projectDeadline: draft.projectDeadline || inheritedProjectDeadline,
-      urgent: draft.urgent,
-      important: draft.important,
       notes: draft.notes,
       links: draft.links.map((link) => link.trim()).filter(Boolean),
       attachments: draft.attachments,
     };
+    if (projectPriorityTouched || draft.urgent !== task.urgent) savePatch.urgent = draft.urgent;
+    if (projectPriorityTouched || draft.important !== task.important) savePatch.important = draft.important;
     savePatch.scheduled = scheduleDate
       ? buildScheduleFromInputs(scheduleDate, scheduleTime || `${`${START_HOUR}`.padStart(2, '0')}:00`)
       : undefined;
@@ -373,6 +416,7 @@ export function TaskModal({
     if (!projectDeadlineTouched || !projectName) return null;
     if (confirmationKey === confirmedProjectDeadlineKey) return null;
     if (nextProjectDeadline === lookupProjectDeadline(projectName)) return null;
+    if (getActiveProjectTaskCount(savePatch) <= 1) return null;
     return {
       savePatch,
       nextStep,
@@ -391,6 +435,7 @@ export function TaskModal({
     if (!projectValueTouched || !projectName) return null;
     if (confirmationKey === confirmedProjectValueKey) return null;
     if (nextProjectValue === lookupProjectValue(projectName)) return null;
+    if (getActiveProjectTaskCount(savePatch) <= 1) return null;
     return {
       savePatch,
       nextStep,
@@ -399,11 +444,34 @@ export function TaskModal({
     };
   }
 
+  function getProjectPriorityConfirmationState(
+    savePatch: Partial<Task>,
+    nextStep: SaveFlowStep,
+  ): ProjectPriorityConfirmationState | null {
+    const projectName = (savePatch.client ?? '').trim();
+    const nextUrgent = Boolean(savePatch.urgent);
+    const nextImportant = Boolean(savePatch.important);
+    const confirmationKey = `${normalizeClientKey(projectName)}::${nextUrgent ? 1 : 0}:${nextImportant ? 1 : 0}`;
+    if (!projectPriorityTouched || !projectName) return null;
+    if (confirmationKey === confirmedProjectPriorityKey) return null;
+    const inheritedPriority = lookupProjectPriority(projectName);
+    if (nextUrgent === inheritedPriority.urgent && nextImportant === inheritedPriority.important) return null;
+    if (getActiveProjectTaskCount(savePatch) <= 1) return null;
+    return {
+      savePatch,
+      nextStep,
+      projectName,
+      urgent: nextUrgent,
+      important: nextImportant,
+    };
+  }
+
   function finishSave(savePatch: Partial<Task>, scope: 'single' | 'future' = 'single') {
     if (savePatch.client) onRestoreClientSuggestion(savePatch.client);
     setPendingSavePatch(null);
     setProjectDeadlineConfirmation(null);
     setProjectValueConfirmation(null);
+    setProjectPriorityConfirmation(null);
     onSave(savePatch, scope);
     onClose();
   }
@@ -414,6 +482,11 @@ export function TaskModal({
     const projectValueState = getProjectValueConfirmationState(state.savePatch, state.nextStep);
     if (projectValueState) {
       setProjectValueConfirmation(projectValueState);
+      return;
+    }
+    const projectPriorityState = getProjectPriorityConfirmationState(state.savePatch, state.nextStep);
+    if (projectPriorityState) {
+      setProjectPriorityConfirmation(projectPriorityState);
       return;
     }
 
@@ -428,6 +501,24 @@ export function TaskModal({
   function continueProjectValueSaveFlow(state: ProjectValueConfirmationState) {
     setConfirmedProjectValueKey(`${normalizeClientKey(state.projectName)}::${state.projectValue}`);
     setProjectValueConfirmation(null);
+    const projectPriorityState = getProjectPriorityConfirmationState(state.savePatch, state.nextStep);
+    if (projectPriorityState) {
+      setProjectPriorityConfirmation(projectPriorityState);
+      return;
+    }
+    if (state.nextStep === 'repeat-scope') {
+      setPendingSavePatch(state.savePatch);
+      return;
+    }
+
+    finishSave(state.savePatch, state.nextStep === 'save-future' ? 'future' : 'single');
+  }
+
+  function continueProjectPrioritySaveFlow(state: ProjectPriorityConfirmationState) {
+    setConfirmedProjectPriorityKey(
+      `${normalizeClientKey(state.projectName)}::${state.urgent ? 1 : 0}:${state.important ? 1 : 0}`,
+    );
+    setProjectPriorityConfirmation(null);
     if (state.nextStep === 'repeat-scope') {
       setPendingSavePatch(state.savePatch);
       return;
@@ -446,6 +537,12 @@ export function TaskModal({
     const projectValueState = getProjectValueConfirmationState(savePatch, nextStep);
     if (projectValueState) {
       setProjectValueConfirmation(projectValueState);
+      return;
+    }
+
+    const projectPriorityState = getProjectPriorityConfirmationState(savePatch, nextStep);
+    if (projectPriorityState) {
+      setProjectPriorityConfirmation(projectPriorityState);
       return;
     }
 
@@ -478,6 +575,13 @@ export function TaskModal({
       minimumFractionDigits: parsed % 1 === 0 ? 0 : 2,
       maximumFractionDigits: 2,
     }).format(parsed);
+  }
+
+  function formatProjectPrioritySignals(urgent: boolean, important: boolean) {
+    if (urgent && important) return 'Urgent + Important';
+    if (urgent) return 'Urgent';
+    if (important) return 'Important';
+    return 'No urgency flags';
   }
 
   function getActiveProjectTaskCount(savePatch: Partial<Task>) {
@@ -612,8 +716,8 @@ export function TaskModal({
           />
         </label>
 
-        <section className="tempo-priority-panel" aria-label="Tempo planning signals">
-          <div className="tempo-priority-toolbar">
+        <section className="tempo-priority-panel" aria-label="Priority signals">
+          <div className="tempo-priority-toolbar" ref={prioritySignalsRef}>
             <button
               type="button"
               className={`tempo-chip tempo-signal-button ${tempoHelpOpen ? 'open' : ''}`}
@@ -622,7 +726,7 @@ export function TaskModal({
               onClick={() => setTempoHelpOpen((current) => !current)}
             >
               <Sparkles size={12} />
-              <span>Tempo Signals</span>
+              <span>Priority Signals</span>
             </button>
 
             {tempoHelpOpen && (
@@ -727,7 +831,10 @@ export function TaskModal({
                   <input
                     type="checkbox"
                     checked={draft.urgent}
-                    onChange={(event) => setDraft({ ...draft, urgent: event.target.checked })}
+                    onChange={(event) => {
+                      setProjectPriorityTouched(true);
+                      setDraft({ ...draft, urgent: event.target.checked });
+                    }}
                   />
                   Urgent
                 </label>
@@ -735,7 +842,10 @@ export function TaskModal({
                   <input
                     type="checkbox"
                     checked={draft.important}
-                    onChange={(event) => setDraft({ ...draft, important: event.target.checked })}
+                    onChange={(event) => {
+                      setProjectPriorityTouched(true);
+                      setDraft({ ...draft, important: event.target.checked });
+                    }}
                   />
                   Important
                 </label>
@@ -1080,6 +1190,44 @@ export function TaskModal({
                 <button
                   className="success"
                   onClick={() => continueProjectValueSaveFlow(projectValueConfirmation)}
+                >
+                  Update project
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
+
+        {projectPriorityConfirmation && (
+          <div className="modal-overlay scope-choice-overlay" onClick={() => setProjectPriorityConfirmation(null)}>
+            <section
+              className="scope-choice-modal project-confirm-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Confirm project priority update"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h4>Update project priority?</h4>
+              <p className="scope-choice-copy">
+                You&apos;re changing priority signals for <strong>{projectPriorityConfirmation.projectName}</strong>.
+              </p>
+              <p className="scope-choice-copy">
+                <strong>{getActiveProjectTaskCount(projectPriorityConfirmation.savePatch)}</strong>{' '}
+                {getActiveProjectTaskCount(projectPriorityConfirmation.savePatch) === 1 ? 'task' : 'tasks'} connected to
+                this project will now use{' '}
+                <strong>
+                  {formatProjectPrioritySignals(
+                    projectPriorityConfirmation.urgent,
+                    projectPriorityConfirmation.important,
+                  )}
+                </strong>
+                .
+              </p>
+              <div className="scope-choice-actions scope-choice-actions-inline">
+                <button onClick={() => setProjectPriorityConfirmation(null)}>Cancel</button>
+                <button
+                  className="success"
+                  onClick={() => continueProjectPrioritySaveFlow(projectPriorityConfirmation)}
                 >
                   Update project
                 </button>
