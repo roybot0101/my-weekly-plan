@@ -19,6 +19,9 @@ export function MarketingLanding() {
         <a className="marcom-cta tempo-primary-button" href="https://app.planwithtempo.com">
           Try for FREE
         </a>
+        <p className="marcom-legal">
+          <a href="/privacy.html">Privacy Policy</a>
+        </p>
       </main>
     </div>
   );
