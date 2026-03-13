@@ -2480,6 +2480,34 @@ textarea {
   width: min(400px, calc(100vw - 32px));
 }
 
+.tempo-overdue-modal {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.tempo-overdue-list {
+  display: grid;
+  gap: 8px;
+  max-height: min(260px, 45vh);
+  overflow: auto;
+}
+
+.tempo-overdue-item {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: #fff;
+  padding: 8px 10px;
+  display: grid;
+  gap: 2px;
+  color: #4f473c;
+  font-size: 0.86rem;
+}
+
+.tempo-overdue-item strong {
+  color: #2f2a23;
+  font-size: 0.9rem;
+}
+
 .settings-modal {
   width: min(560px, 100%);
 }

@@ -93,6 +93,12 @@ type TempoUndoEntry = {
   plannedDayIndex: number;
   plannedSlot: number;
 };
+type TempoPastDuePlacement = {
+  taskId: string;
+  title: string;
+  dueDateLabel: string;
+  scheduledDateLabel: string;
+};
 type SwipeAxis = 'x' | 'y' | null;
 type MobileSwipeGesture = {
   startX: number;
@@ -240,6 +246,14 @@ function parseDateKey(value: string) {
 function differenceInCalendarDays(from: Date, to: Date) {
   const msPerDay = 1000 * 60 * 60 * 24;
   return Math.round((to.getTime() - from.getTime()) / msPerDay);
+}
+
+function getScheduledDateFromWeekDay(weekKey: string, dayIndex: number) {
+  const monday = parseDateKey(weekKey);
+  if (!monday) return null;
+  const scheduled = new Date(monday);
+  scheduled.setDate(scheduled.getDate() + dayIndex);
+  return new Date(scheduled.getFullYear(), scheduled.getMonth(), scheduled.getDate());
 }
 
 function parseProjectValueAmount(value: string) {
@@ -444,6 +458,7 @@ function App() {
   const [tempoPlanning, setTempoPlanning] = useState(false);
   const [tempoPlanNotice, setTempoPlanNotice] = useState<TempoPlanNotice | null>(null);
   const [tempoUndoEntries, setTempoUndoEntries] = useState<TempoUndoEntry[]>([]);
+  const [tempoPastDuePlacements, setTempoPastDuePlacements] = useState<TempoPastDuePlacement[] | null>(null);
   const [savingDotCount, setSavingDotCount] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -931,17 +946,18 @@ function App() {
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
-    if (!taskInModal && !settingsOpen && !mobileSlotPicker) return;
+    if (!taskInModal && !settingsOpen && !mobileSlotPicker && !tempoPastDuePlacements) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
       document.body.style.overflow = previousOverflow;
     };
-  }, [taskInModal, settingsOpen, mobileSlotPicker]);
+  }, [taskInModal, settingsOpen, mobileSlotPicker, tempoPastDuePlacements]);
 
   useEffect(() => {
     setTempoPlanNotice(null);
     setTempoUndoEntries([]);
+    setTempoPastDuePlacements(null);
   }, [weekKey]);
 
   useEffect(() => {
@@ -2499,6 +2515,7 @@ function App() {
 
   async function handlePlanMyWeek() {
     if (!userId) return;
+    setTempoPastDuePlacements(null);
 
     if (tempoPlanningStartDay >= DAY_NAMES.length) {
       setTempoPlanNotice({
@@ -2604,9 +2621,13 @@ function App() {
       const earliestPlacement = nextEarliestByProject.get(projectKey);
       const startDayIndex = Math.max(tempoPlanningStartDay, earliestPlacement?.dayIndex ?? tempoPlanningStartDay);
       const taskDeadline = parseDateKey(getEffectiveDeadline(task));
-      const latestDayIndex = weekStartDate && taskDeadline
-        ? Math.min(DAY_NAMES.length - 1, differenceInCalendarDays(weekStartDate, taskDeadline))
-        : DAY_NAMES.length - 1;
+      const latestDayIndex = (() => {
+        if (!weekStartDate || !taskDeadline) return DAY_NAMES.length - 1;
+        const relativeDeadlineDay = differenceInCalendarDays(weekStartDate, taskDeadline);
+        // If the task is already overdue before this selected week starts, still allow Tempo to place it this week.
+        if (relativeDeadlineDay < 0) return DAY_NAMES.length - 1;
+        return Math.min(DAY_NAMES.length - 1, relativeDeadlineDay);
+      })();
 
       if (latestDayIndex < 0 || startDayIndex > latestDayIndex) {
         return false;
@@ -2718,6 +2739,28 @@ function App() {
           }),
         );
       });
+
+      const dateFormatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
+      const scheduledFormatter = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      const pastDuePlacements = updatedTasks
+        .map((task) => {
+          if (!task.scheduled) return null;
+          const effectiveDeadline = parseDateKey(getEffectiveDeadline(task));
+          if (!effectiveDeadline) return null;
+          const scheduledDate = getScheduledDateFromWeekDay(task.scheduled.weekKey, task.scheduled.dayIndex);
+          if (!scheduledDate) return null;
+          if (scheduledDate.getTime() <= effectiveDeadline.getTime()) return null;
+
+          return {
+            taskId: task.id,
+            title: task.title.trim() || 'Untitled task',
+            dueDateLabel: dateFormatter.format(effectiveDeadline),
+            scheduledDateLabel: scheduledFormatter.format(scheduledDate),
+          } satisfies TempoPastDuePlacement;
+        })
+        .filter((entry): entry is TempoPastDuePlacement => Boolean(entry))
+        .sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
+
       setTempoUndoEntries(undoEntries);
       setTempoPlanNotice({
         tone: unscheduledCountByTaskId.size > 0 ? 'warning' : 'neutral',
@@ -2726,9 +2769,11 @@ function App() {
             ? `Plan complete. ${plannedEntries.length} task${plannedEntries.length === 1 ? '' : 's'} scheduled.${unscheduledCountByTaskId.size > 0 ? ` ${unscheduledCountByTaskId.size} could not fit into future work-block time this week.` : ''}`
             : `Plan complete. No future work-block window was large enough for the remaining ${tempoPlannableTasks.length} task${tempoPlannableTasks.length === 1 ? '' : 's'}.`,
       });
+      setTempoPastDuePlacements(pastDuePlacements.length > 0 ? pastDuePlacements : null);
       setErrorMessage(null);
     } catch (error) {
       setTempoUndoEntries([]);
+      setTempoPastDuePlacements(null);
       setErrorMessage(error instanceof Error ? error.message : 'Failed to plan your week.');
     } finally {
       setTempoPlanning(false);
@@ -2799,6 +2844,56 @@ function App() {
       setErrorMessage(null);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to undo the last Tempo plan.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleUnschedulePastDueTempoTasks() {
+    if (!userId || !tempoPastDuePlacements || tempoPastDuePlacements.length === 0) return;
+
+    const taskIds = tempoPastDuePlacements.map((entry) => entry.taskId);
+    const patchByTaskId = new Map(
+      taskIds.map((taskId) => [
+        taskId,
+        {
+          scheduled: undefined,
+          planningSource: undefined,
+        } satisfies Partial<Task>,
+      ]),
+    );
+
+    setSaving(true);
+    try {
+      const updatedTasks = await Promise.all(
+        taskIds.map((taskId) =>
+          updateTask(userId, taskId, {
+            scheduled: undefined,
+            planningSource: undefined,
+          }),
+        ),
+      );
+      const updatedById = new Map(updatedTasks.map((task) => [task.id, task]));
+      runTaskTransition(() => {
+        setTasks((current) =>
+          current.map((task) => {
+            const updatedTask = updatedById.get(task.id);
+            if (!updatedTask) return task;
+            return mergeTaskDetails(updatedTask, task, patchByTaskId.get(task.id));
+          }),
+        );
+      });
+
+      const nextBacklogOrder = [...taskIds, ...backlogOrder.filter((id) => !taskIds.includes(id))];
+      await persistBacklogOrder(nextBacklogOrder);
+      setTempoPastDuePlacements(null);
+      setTempoPlanNotice({
+        tone: 'warning',
+        text: `${taskIds.length} task${taskIds.length === 1 ? '' : 's'} unscheduled because they were placed past due date.`,
+      });
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to unschedule past-due tasks.');
     } finally {
       setSaving(false);
     }
@@ -3825,6 +3920,42 @@ function App() {
                 Save Settings
               </button>
             </footer>
+          </section>
+        </div>
+      )}
+
+      {tempoPastDuePlacements && tempoPastDuePlacements.length > 0 && (
+        <div className="modal-overlay scope-choice-overlay" onClick={() => setTempoPastDuePlacements(null)}>
+          <section
+            className="scope-choice-modal project-confirm-modal tempo-overdue-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Tasks scheduled past due date"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h4>
+              {tempoPastDuePlacements.length === 1
+                ? '1 Task is scheduled past its due date.'
+                : `${tempoPastDuePlacements.length} Tasks are scheduled past their due dates.`}
+            </h4>
+            <p className="scope-choice-copy">
+              Would you like Tempo to unschedule these tasks?
+            </p>
+            <div className="tempo-overdue-list" role="list">
+              {tempoPastDuePlacements.map((entry) => (
+                <p key={entry.taskId} className="tempo-overdue-item" role="listitem">
+                  <strong>{entry.title}</strong>
+                  <span>Due {entry.dueDateLabel}</span>
+                  <span>Scheduled {entry.scheduledDateLabel}</span>
+                </p>
+              ))}
+            </div>
+            <div className="scope-choice-actions scope-choice-actions-inline">
+              <button type="button" onClick={() => setTempoPastDuePlacements(null)}>Keep scheduled</button>
+              <button type="button" className="danger" disabled={saving} onClick={() => void handleUnschedulePastDueTempoTasks()}>
+                Unschedule tasks
+              </button>
+            </div>
           </section>
         </div>
       )}
