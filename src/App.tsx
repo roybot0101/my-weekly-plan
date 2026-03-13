@@ -20,6 +20,7 @@ import {
   Copy,
   ListRestart,
   Plus,
+  ShieldCheck,
   Sparkles,
   Undo2,
   X,
@@ -3070,9 +3071,6 @@ function App() {
           </label>
 
           <div className="auth-actions">
-            <button onClick={() => void handleAuthSubmit()}>
-              {authMode === 'sign-up' ? 'Create Account' : 'Sign In'}
-            </button>
             <button
               onClick={() => {
                 setAuthMode((current) => (current === 'sign-in' ? 'sign-up' : 'sign-in'));
@@ -3081,13 +3079,16 @@ function App() {
             >
               {authMode === 'sign-up' ? 'Use Existing Account' : 'Create New Account'}
             </button>
+            <button onClick={() => void handleAuthSubmit()}>
+              {authMode === 'sign-up' ? 'Create Account' : 'Sign In'}
+            </button>
           </div>
 
           <div className="oauth-divider" role="separator" aria-label="OAuth sign-in options">
             <span>or continue with</span>
           </div>
 
-          <div className="auth-actions oauth-actions oauth-brand-stack">
+          <div className="auth-actions oauth-actions oauth-brand-stack single-provider">
             <button className="oauth-button oauth-google" onClick={() => void handleOAuth('google')}>
               <span className="oauth-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
@@ -3109,22 +3110,13 @@ function App() {
                   />
                 </svg>
               </span>
-              <span>Continue</span>
-            </button>
-            <button className="oauth-button oauth-facebook" onClick={() => void handleOAuth('facebook')}>
-              <span className="oauth-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
-                  <circle cx="12" cy="12" r="12" fill="#ffffff" />
-                  <path
-                    d="M13.37 8.35h1.64V5.5h-1.93c-2.52 0-3.9 1.54-3.9 4.1V11H7v2.68h2.18v4.82h2.93v-4.82h2.43l.39-2.68h-2.82V9.89c0-.88.3-1.54 1.26-1.54Z"
-                    fill="#1877f2"
-                  />
-                </svg>
-              </span>
-              <span>Continue</span>
+              <span>Continue with Google</span>
             </button>
           </div>
-          <p className="login-trust-note">Secure sign-in powered by Google/Facebook + Supabase</p>
+          <p className="login-trust-note">
+            <ShieldCheck size={14} aria-hidden="true" />
+            <span>Secure sign-in powered by Google + Supabase</span>
+          </p>
           </main>
         </div>
       </div>

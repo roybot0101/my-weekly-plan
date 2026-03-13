@@ -156,6 +156,10 @@ textarea:focus-visible {
     animation-duration: 520ms;
     animation-timing-function: cubic-bezier(0.22, 0.61, 0.36, 1);
   }
+
+  .header-title-icon {
+    animation: logoAxisWiggle 1600ms ease-in-out 420ms 1 both;
+  }
 }
 
 .tempo-primary-button {
@@ -258,7 +262,7 @@ textarea {
   width: min(920px, 100%);
   display: grid;
   justify-items: center;
-  gap: 22px;
+  gap: 16px;
   padding: clamp(32px, 4.8vw, 56px) clamp(22px, 5vw, 64px);
   border: 1px solid rgba(142, 122, 174, 0.24);
   border-radius: 32px;
@@ -276,15 +280,26 @@ textarea {
   filter: drop-shadow(0 10px 18px rgba(111, 90, 138, 0.16));
 }
 
-.marcom-tagline {
+.marcom-title {
+  margin: -50px 0 0;
+  padding: 0;
+  font-family: 'Pacifico', cursive;
+  font-weight: 400;
+  color: #A77E45;
+  text-shadow: 0 1px 3px rgba(28, 73, 123, 0.2);
+  font-size: clamp(2rem, 5.6vw, 4.4rem);
+  line-height: 1.06;
+}
+
+.marcom-subhead {
   margin: 0;
   text-align: center;
   text-wrap: balance;
-  max-width: 24ch;
+  max-width: 38ch;
   color: #3e3a34;
-  font-size: clamp(2rem, 5.8vw, 4.4rem);
-  line-height: 1.05;
-  letter-spacing: -0.03em;
+  font-size: clamp(1.2rem, 2.6vw, 2rem);
+  line-height: 1.2;
+  letter-spacing: -0.01em;
 }
 
 .marcom-cta {
@@ -460,7 +475,7 @@ textarea {
 .header-title-icon {
   position: static;
   width: auto;
-  height: calc(var(--hero-title-size) * 1.8);
+  height: calc(var(--hero-title-size) * 2.592);
   object-fit: contain;
   z-index: 1403;
   pointer-events: none;
@@ -3078,7 +3093,7 @@ textarea {
   }
 
   .header-title-icon {
-    height: calc(var(--hero-title-size) * 1.92);
+    height: calc(var(--hero-title-size) * 2.7648);
     margin-left: -8px;
   }
 }
@@ -3104,7 +3119,7 @@ textarea {
   }
 
   .header-title-icon {
-    height: calc(var(--hero-title-size) * 1.82);
+    height: calc(var(--hero-title-size) * 2.6208);
     margin-left: -10px;
   }
 }
@@ -3113,6 +3128,10 @@ textarea {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.auth-actions:not(.oauth-actions) {
+  justify-content: center;
 }
 
 .oauth-divider {
@@ -3145,6 +3164,11 @@ textarea {
   gap: 10px;
 }
 
+.oauth-brand-stack.single-provider {
+  grid-template-columns: minmax(0, 320px);
+  justify-content: center;
+}
+
 .oauth-brand-stack .oauth-button {
   width: 100%;
   min-height: 50px;
@@ -3157,6 +3181,10 @@ textarea {
   gap: 8px;
   font-size: 0.84rem;
   font-weight: 700;
+}
+
+.oauth-brand-stack.single-provider .oauth-button {
+  justify-content: center;
 }
 
 .oauth-button .oauth-icon {
@@ -3195,7 +3223,11 @@ textarea {
 
 .login-trust-note {
   margin: 4px 0 0;
-  text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
   font-size: 0.74rem;
   color: var(--muted);
   opacity: 0.9;
