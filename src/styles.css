@@ -27,18 +27,32 @@
   --sticky-bar-bottom: 92px;
   --scheduled-card-left-inset: 2px;
   --scheduled-card-right-inset: 2px;
+  --viewport-height: 100vh;
+}
+
+@supports (height: 100dvh) {
+  :root {
+    --viewport-height: 100dvh;
+  }
 }
 
 * {
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  min-height: var(--viewport-height);
+}
+
 body {
   margin: 0;
-  min-height: 100vh;
+  min-height: var(--viewport-height);
   color: var(--ink);
   font-family: 'Avenir Next', 'Nunito Sans', 'Segoe UI', sans-serif;
   background: radial-gradient(circle at 12% 4%, #faf5ed 0%, #f4eee5 52%, #ece3d7 100%);
+  overflow-x: hidden;
 }
 
 h1,
@@ -213,7 +227,7 @@ textarea {
 }
 
 .login-shell {
-  min-height: 100vh;
+  min-height: var(--viewport-height);
   display: grid;
   place-items: center;
   padding: 20px;
@@ -222,7 +236,7 @@ textarea {
 }
 
 .marcom-shell {
-  min-height: 100vh;
+  min-height: var(--viewport-height);
   position: relative;
   display: grid;
   place-items: center;
@@ -300,6 +314,22 @@ textarea {
   font-size: clamp(1.2rem, 2.6vw, 2rem);
   line-height: 1.2;
   letter-spacing: -0.01em;
+}
+
+.marcom-video-wrap {
+  width: min(860px, 100%);
+  border: 1px solid rgba(142, 122, 174, 0.2);
+  border-radius: 22px;
+  overflow: hidden;
+  box-shadow: 0 12px 28px rgba(66, 56, 44, 0.12);
+  background: #000;
+}
+
+.marcom-video {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  display: block;
+  border: 0;
 }
 
 .marcom-cta {
@@ -396,8 +426,9 @@ textarea {
 
 .planner-shell {
   padding: 16px 0;
-  min-height: 100vh;
+  min-height: var(--viewport-height);
   position: relative;
+  overflow-x: clip;
 }
 
 .planner-shell.header-collapsed {
@@ -506,11 +537,16 @@ textarea {
   position: absolute;
   top: 0;
   right: 0;
+  max-width: calc(100% - 10px);
 }
 
 .account-email {
   color: var(--muted);
   font-size: 0.92rem;
+  max-width: 42vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .account-link {
@@ -726,6 +762,13 @@ textarea {
 .tempo-plan-button {
   min-width: 156px;
   justify-content: center;
+  min-height: 40px;
+}
+
+.tempo-plan-button span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tempo-link-row {
@@ -886,7 +929,7 @@ textarea {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
   gap: 12px;
-  min-height: calc(100vh - 170px);
+  min-height: calc(var(--viewport-height) - 170px);
   width: 100%;
   min-width: 0;
   padding-left: 16px;
@@ -928,7 +971,7 @@ textarea {
   display: flex;
   flex-direction: column;
   min-height: 200px;
-  max-height: calc(100vh - 182px);
+  max-height: calc(var(--viewport-height) - 182px);
   overflow: hidden;
   position: relative;
   z-index: 1250;
@@ -1299,7 +1342,7 @@ textarea {
 }
 
 .kanban-column {
-  min-height: calc(100vh - 182px);
+  min-height: calc(var(--viewport-height) - 182px);
   padding: 10px;
 }
 
@@ -1316,13 +1359,14 @@ textarea {
   position: relative;
   min-width: 0;
   overflow-x: hidden;
+  overscroll-behavior-x: contain;
 }
 
 .timeline-viewport-scrollbar {
   position: fixed;
   left: var(--timeline-pill-layer-left, 0px);
   width: var(--timeline-pill-layer-width, 100%);
-  bottom: 3px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 3px);
   height: 16px;
   overflow-x: auto;
   overflow-y: hidden;
@@ -1788,16 +1832,21 @@ textarea {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  padding: 18px;
+  padding:
+    max(18px, calc(env(safe-area-inset-top, 0px) + 8px))
+    max(18px, calc(env(safe-area-inset-right, 0px) + 8px))
+    max(18px, calc(env(safe-area-inset-bottom, 0px) + 8px))
+    max(18px, calc(env(safe-area-inset-left, 0px) + 8px));
   display: grid;
   place-items: center;
   background: rgba(54, 47, 40, 0.42);
   z-index: 2000;
+  overscroll-behavior: contain;
 }
 
 .task-modal {
   width: min(680px, 100%);
-  max-height: 92vh;
+  max-height: min(92vh, calc(var(--viewport-height) - 36px));
   overflow: hidden;
   background: var(--surface);
   border-radius: var(--radius-lg);
@@ -1816,6 +1865,8 @@ textarea {
   display: grid;
   gap: 8px;
   padding: 2px 6px 0 2px;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   scrollbar-gutter: stable both-edges;
   scrollbar-color: #b1a083 #ebe2d6;
   scrollbar-width: thin;
@@ -2702,7 +2753,7 @@ textarea {
   position: absolute;
   left: 12px;
   right: 12px;
-  bottom: 12px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -2759,6 +2810,7 @@ textarea {
   .top-controls {
     justify-content: space-between;
     gap: 6px;
+    row-gap: 8px;
     flex-wrap: wrap;
     padding-left: 8px;
     padding-right: 12px;
@@ -2769,7 +2821,7 @@ textarea {
     margin-right: 8px;
     margin-left: -4px;
     gap: 4px;
-    flex: 1 1 auto;
+    flex: 1 1 210px;
     min-width: 0;
     align-items: center;
   }
@@ -2852,6 +2904,8 @@ textarea {
 
   .tempo-plan-button {
     width: auto;
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   .tempo-plan-note {
@@ -2868,6 +2922,7 @@ textarea {
   .tempo-link-row {
     justify-content: flex-end;
     gap: 8px 12px;
+    flex: 0 0 auto;
   }
 
   .header-brand {
@@ -2958,6 +3013,7 @@ textarea {
 
   .timeline-area {
     overflow: hidden;
+    touch-action: pan-y;
   }
 
   .timeline-viewport-scrollbar {
@@ -3012,6 +3068,17 @@ textarea {
   .schedule-repeat-head {
     grid-template-columns: 1fr;
     align-items: start;
+  }
+
+  .schedule-row {
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+
+  .schedule-row input[type='date'],
+  .schedule-row input[type='time'] {
+    width: 100%;
+    min-width: 0;
   }
 
   .mobile-slot-picker-backdrop {
@@ -3088,6 +3155,20 @@ textarea {
     gap: 4px;
   }
 
+  .account-row {
+    top: 2px;
+    right: 2px;
+    gap: 8px;
+  }
+
+  .account-email {
+    display: none;
+  }
+
+  .account-link {
+    font-size: 0.78rem;
+  }
+
   .header-title {
     font-size: var(--hero-title-size);
   }
@@ -3114,6 +3195,23 @@ textarea {
     gap: 2px;
   }
 
+  .mobile-day-nav-inline strong {
+    min-width: 28px;
+    font-size: 0.76rem;
+  }
+
+  .mobile-day-nav-inline button {
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+  }
+
+  .view-toggle-button {
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+  }
+
   .header-title {
     font-size: var(--hero-title-size);
   }
@@ -3121,6 +3219,56 @@ textarea {
   .header-title-icon {
     height: calc(var(--hero-title-size) * 2.6208);
     margin-left: -10px;
+  }
+}
+
+@media (max-width: 700px) {
+  .marcom-card {
+    border-radius: 24px;
+    gap: 12px;
+    padding: 26px 16px 28px;
+  }
+
+  .marcom-title {
+    margin-top: -36px;
+  }
+
+  .marcom-subhead {
+    font-size: 1.18rem;
+  }
+
+  .marcom-video-wrap {
+    border-radius: 16px;
+  }
+
+  .marcom-cta {
+    width: min(100%, 320px);
+    min-height: 54px;
+    font-size: 1.05rem;
+  }
+}
+
+@media (max-width: 420px) {
+  .marcom-title {
+    margin-top: -24px;
+    font-size: 2.05rem;
+  }
+
+  .marcom-subhead {
+    font-size: 1.03rem;
+    line-height: 1.28;
+  }
+}
+
+@media (hover: none) {
+  button:hover {
+    transform: none;
+    border-color: var(--line);
+  }
+
+  .tempo-primary-button:hover {
+    border-color: #7c6798;
+    background: linear-gradient(180deg, #ab99c8 0%, var(--tempo) 100%);
   }
 }
 
@@ -3244,7 +3392,7 @@ textarea {
 .status-slot {
   position: fixed;
   left: 16px;
-  bottom: 6px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 6px);
   min-height: 24px;
   margin-bottom: 0;
   z-index: 1900;

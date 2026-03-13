@@ -809,7 +809,7 @@ function App() {
       lastX: touch.clientX,
       axis: null,
     };
-    setMobileSwipeDragging(true);
+    setMobileSwipeDragging(false);
     setMobileSwipeOffsetPx(0);
   }
 
@@ -825,20 +825,35 @@ function App() {
     if (gesture.axis === null) {
       const absX = Math.abs(deltaX);
       const absY = Math.abs(deltaY);
-      if (absX < 6 && absY < 6) return;
-      gesture.axis = absX > absY ? 'x' : 'y';
+      if (absX < 8 && absY < 8) return;
+
+      const horizontalIntent = absX > 18 && absX > absY * 1.35;
+      const verticalIntent = absY > 10 && absY > absX * 1.1;
+      if (!horizontalIntent && !verticalIntent) return;
+
+      gesture.axis = horizontalIntent ? 'x' : 'y';
+      if (gesture.axis !== 'x') {
+        setMobileSwipeDragging(false);
+        setMobileSwipeOffsetPx(0);
+        return;
+      }
+
+      setMobileSwipeDragging(true);
     }
 
     if (gesture.axis !== 'x') return;
 
     if (event.cancelable) event.preventDefault();
 
+    const trackWidth = timelineAreaRef.current?.clientWidth ?? window.innerWidth;
+    const maxPeekOffset = Math.max(48, Math.round(trackWidth * 0.34));
     const canPeekPrev = mobileDay > 0;
     const canPeekNext = mobileDay < DAY_NAMES.length - 1;
     let offset = deltaX;
     if ((deltaX > 0 && !canPeekPrev) || (deltaX < 0 && !canPeekNext)) {
       offset = deltaX * 0.22;
     }
+    offset = Math.max(-maxPeekOffset, Math.min(maxPeekOffset, offset));
     setMobileSwipeOffsetPx(offset);
   }
 
@@ -913,6 +928,16 @@ function App() {
   useEffect(() => {
     taskInModalRef.current = taskInModal;
   }, [taskInModal]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    if (!taskInModal && !settingsOpen && !mobileSlotPicker) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [taskInModal, settingsOpen, mobileSlotPicker]);
 
   useEffect(() => {
     setTempoPlanNotice(null);
