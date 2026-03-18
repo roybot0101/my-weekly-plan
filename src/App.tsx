@@ -18,6 +18,8 @@ import {
   ChevronRight,
   Columns3,
   Copy,
+  ListChevronsDownUp,
+  ListChevronsUpDown,
   ListRestart,
   Plus,
   ShieldCheck,
@@ -82,6 +84,7 @@ const SCHEDULED_CARD_TOP_OFFSET = 1;
 const SCHEDULED_CARD_BOTTOM_GAP = 2;
 type KanbanDropTarget = { status: TaskStatus; insertIndex: number } | null;
 type FloatingDayPill = { dayIndex: number; left: number };
+type FloatingKanbanPill = { key: TaskStatus; label: string; left: number };
 type TempoScheduleOverlaySegment = { key: string; top: number; height: number };
 type TempoWorkRange = { startSlot: number; endSlot: number; blockType: 'early' | 'daylight' | 'late' | 'general' };
 type TempoPlanNotice = { tone: 'neutral' | 'warning'; text: string };
@@ -435,7 +438,7 @@ function getTempoProjectPriorityScore(tasks: Task[], weekStartKey: string) {
 
 function getTempoPlanningStartDay(weekStartKey: string, todayWeekKey: string, todayDayIndex: number) {
   if (weekStartKey < todayWeekKey) return DAY_NAMES.length;
-  if (weekStartKey === todayWeekKey) return todayDayIndex + 1;
+  if (weekStartKey === todayWeekKey) return todayDayIndex;
   return 0;
 }
 
@@ -493,7 +496,10 @@ function App() {
   const [mobileSwipeDragging, setMobileSwipeDragging] = useState(false);
   const [mobileSlotPicker, setMobileSlotPicker] = useState<{ dayIndex: number; slot: number } | null>(null);
   const [mobileSlotPickerError, setMobileSlotPickerError] = useState<string | null>(null);
+  const [mobileBacklogOpen, setMobileBacklogOpen] = useState(false);
+  const [desktopBacklogOpen, setDesktopBacklogOpen] = useState(true);
   const [fixedDayPills, setFixedDayPills] = useState<FloatingDayPill[]>([]);
+  const [fixedKanbanPills, setFixedKanbanPills] = useState<FloatingKanbanPill[]>([]);
   const [showViewportTimelineScrollbar, setShowViewportTimelineScrollbar] = useState(false);
   const [timelineScrollbarContentWidth, setTimelineScrollbarContentWidth] = useState(0);
   const [headerCollapsed, setHeaderCollapsed] = useState(false);
@@ -505,9 +511,24 @@ function App() {
   const taskInModalRef = useRef<string | null>(null);
   const dayHeaderRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const dayColumnRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const kanbanHeaderRefs = useRef<Record<TaskStatus, HTMLHeadingElement | null>>({
+    'Not Started': null,
+    Blocked: null,
+    'In Progress': null,
+    'In Review': null,
+    Done: null,
+  });
+  const kanbanColumnRefs = useRef<Record<TaskStatus, HTMLDivElement | null>>({
+    'Not Started': null,
+    Blocked: null,
+    'In Progress': null,
+    'In Review': null,
+    Done: null,
+  });
   const timelineGridRef = useRef<HTMLDivElement | null>(null);
   const timelineViewportScrollbarRef = useRef<HTMLDivElement | null>(null);
   const timelineAreaRef = useRef<HTMLElement | null>(null);
+  const kanbanAreaRef = useRef<HTMLElement | null>(null);
   const timeAxisRef = useRef<HTMLDivElement | null>(null);
   const mobileSwipeRef = useRef<MobileSwipeGesture | null>(null);
   const headerCollapseLockedRef = useRef(false);
@@ -651,6 +672,7 @@ function App() {
     () =>
       tasks.filter((task) => {
         if (task.completed || task.status === 'Done') return false;
+        if (task.status === 'Blocked') return false;
         if (task.scheduled) return false;
         if (task.repeatParentId) return false;
         if (isRepeatTemplate(task)) return false;
@@ -742,7 +764,7 @@ function App() {
     if (tempoPlanningStartDay >= DAY_NAMES.length) {
       return {
         tone: 'warning',
-        text: 'Tempo only plans future days, so this week has no schedulable days left.',
+        text: 'Tempo only plans future time, so this week has no schedulable time left.',
       };
     }
     if (workBlocks.length === 0) {
@@ -955,14 +977,42 @@ function App() {
   }, [taskInModal, settingsOpen, mobileSlotPicker, tempoPastDuePlacements]);
 
   useEffect(() => {
+    if (userId) {
+      setDesktopBacklogOpen(true);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    if (viewMode !== 'plan') {
+      setMobileBacklogOpen(false);
+    }
+  }, [viewMode]);
+
+  useEffect(() => {
+    if (mobileSlotPicker) {
+      setMobileBacklogOpen(false);
+    }
+  }, [mobileSlotPicker]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onResize = () => {
+      if (!isMobileViewport()) setMobileBacklogOpen(false);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  useEffect(() => {
     setTempoPlanNotice(null);
     setTempoUndoEntries([]);
     setTempoPastDuePlacements(null);
   }, [weekKey]);
 
   useEffect(() => {
-    if (viewMode !== 'plan') {
+    if (viewMode !== 'plan' && viewMode !== 'kanban') {
       setFixedDayPills([]);
+      setFixedKanbanPills([]);
       setShowViewportTimelineScrollbar(false);
       return;
     }
@@ -971,16 +1021,18 @@ function App() {
       const stickyBar = document.querySelector('.sticky-planning-bar') as HTMLElement | null;
       const stickyBottom = Math.max(0, Math.ceil(stickyBar?.getBoundingClientRect().bottom ?? 0));
       document.documentElement.style.setProperty('--sticky-bar-bottom', `${stickyBottom}px`);
-      const timelineRect = timelineAreaRef.current?.getBoundingClientRect();
-      const calendarLeftEdge = timelineRect?.left ?? 0;
-      const calendarRightEdge = timelineRect?.right ?? window.innerWidth;
-      const timelineWidth = Math.max(0, timelineRect?.width ?? window.innerWidth);
+      const activeAreaRect = (
+        viewMode === 'plan' ? timelineAreaRef.current : kanbanAreaRef.current
+      )?.getBoundingClientRect();
+      const calendarLeftEdge = activeAreaRect?.left ?? 0;
+      const calendarRightEdge = activeAreaRect?.right ?? window.innerWidth;
+      const activeAreaWidth = Math.max(0, activeAreaRect?.width ?? window.innerWidth);
       document.documentElement.style.setProperty('--timeline-pill-layer-left', `${Math.max(0, calendarLeftEdge)}px`);
-      document.documentElement.style.setProperty('--timeline-pill-layer-width', `${timelineWidth}px`);
+      document.documentElement.style.setProperty('--timeline-pill-layer-width', `${activeAreaWidth}px`);
 
       const timelineGrid = timelineGridRef.current;
       const isDesktopPlan = !isMobileViewport();
-      if (timelineGrid && isDesktopPlan) {
+      if (viewMode === 'plan' && timelineGrid && isDesktopPlan) {
         const nextWidth = timelineGrid.scrollWidth;
         const hasHorizontalOverflow = nextWidth > timelineGrid.clientWidth + 1;
         setShowViewportTimelineScrollbar((current) => (current === hasHorizontalOverflow ? current : hasHorizontalOverflow));
@@ -994,26 +1046,46 @@ function App() {
         setShowViewportTimelineScrollbar((current) => (current ? false : current));
       }
 
-      const next: FloatingDayPill[] = [];
-      DAY_NAMES.forEach((_, dayIndex) => {
-        const header = dayHeaderRefs.current[dayIndex];
-        const column = dayColumnRefs.current[dayIndex];
-        if (!header) return;
-        if (!column) return;
-        const rect = header.getBoundingClientRect();
-        const colRect = column.getBoundingClientRect();
-        const isVisible =
-          colRect.left < calendarRightEdge &&
-          colRect.right > calendarLeftEdge;
-        if (rect.top < stickyBottom && isVisible) {
-          next.push({
-            dayIndex,
-            left: colRect.left + colRect.width / 2 - calendarLeftEdge,
-          });
-        }
-      });
-
-      setFixedDayPills(next);
+      if (viewMode === 'plan') {
+        const nextDayPills: FloatingDayPill[] = [];
+        DAY_NAMES.forEach((_, dayIndex) => {
+          const header = dayHeaderRefs.current[dayIndex];
+          const column = dayColumnRefs.current[dayIndex];
+          if (!header || !column) return;
+          const rect = header.getBoundingClientRect();
+          const colRect = column.getBoundingClientRect();
+          const isVisible =
+            colRect.left < calendarRightEdge &&
+            colRect.right > calendarLeftEdge;
+          if (rect.top < stickyBottom && isVisible) {
+            nextDayPills.push({
+              dayIndex,
+              left: colRect.left + colRect.width / 2 - calendarLeftEdge,
+            });
+          }
+        });
+        setFixedDayPills(nextDayPills);
+        setFixedKanbanPills((current) => (current.length > 0 ? [] : current));
+      } else {
+        const nextKanbanPills: FloatingKanbanPill[] = [];
+        KANBAN_COLUMNS.forEach((column) => {
+          const header = kanbanHeaderRefs.current[column.dropStatus];
+          const wrapper = kanbanColumnRefs.current[column.dropStatus];
+          if (!header || !wrapper) return;
+          const rect = header.getBoundingClientRect();
+          const colRect = wrapper.getBoundingClientRect();
+          const isVisible = colRect.left < calendarRightEdge && colRect.right > calendarLeftEdge;
+          if (rect.top < stickyBottom && isVisible) {
+            nextKanbanPills.push({
+              key: column.dropStatus,
+              label: column.label,
+              left: colRect.left + colRect.width / 2 - calendarLeftEdge,
+            });
+          }
+        });
+        setFixedKanbanPills(nextKanbanPills);
+        setFixedDayPills((current) => (current.length > 0 ? [] : current));
+      }
     };
 
     let rafId = 0;
@@ -1414,6 +1486,17 @@ function App() {
 
   function updateHoverTargets(x: number, y: number) {
     const target = detectDropTarget(x, y);
+    const draggingTask = draggingTaskIdRef.current ? taskById.get(draggingTaskIdRef.current) : null;
+    const draggingFromBacklog = Boolean(draggingTask && !draggingTask.scheduled);
+    if (
+      target.type !== 'backlog' &&
+      draggingFromBacklog &&
+      viewMode === 'plan' &&
+      mobileBacklogOpen &&
+      isMobileViewport()
+    ) {
+      setMobileBacklogOpen(false);
+    }
     if (target.type === 'slot' && draggingTaskIdRef.current) {
       const shiftPlan = buildStableShiftPlan(draggingTaskIdRef.current, target.dayIndex, target.slot);
       if (shiftPlan) {
@@ -1662,6 +1745,12 @@ function App() {
   function onTaskHandlePointerDown(taskId: string, event: ReactPointerEvent<HTMLDivElement>) {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     event.preventDefault();
+    if (viewMode === 'plan' && mobileBacklogOpen && isMobileViewport()) {
+      const sourceTask = taskById.get(taskId);
+      if (sourceTask && !sourceTask.scheduled) {
+        setMobileBacklogOpen(false);
+      }
+    }
 
     const card = (event.currentTarget as HTMLElement).closest('.task-card') as HTMLElement | null;
     if (!card) return;
@@ -2520,7 +2609,7 @@ function App() {
     if (tempoPlanningStartDay >= DAY_NAMES.length) {
       setTempoPlanNotice({
         tone: 'warning',
-        text: 'Tempo only plans future days, so there is nothing left to schedule in this week.',
+        text: 'Tempo only plans future time, so there is nothing left to schedule in this week.',
       });
       return;
     }
@@ -2611,6 +2700,12 @@ function App() {
     const unscheduledCountByTaskId = new Set<string>();
     const nextEarliestByProject = new Map<string, { dayIndex: number; slot: number }>();
     const weekStartDate = parseDateKey(weekKey);
+    const isPlanningCurrentWeek = weekKey === todayWeekKey;
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const plannerStartMinutes = START_HOUR * 60;
+    const currentDayMinSlot = isPlanningCurrentWeek
+      ? Math.min(TOTAL_SLOTS, Math.max(0, Math.ceil((nowMinutes - plannerStartMinutes) / SLOT_MINUTES)))
+      : 0;
 
     function tryPlaceTask(
       task: Task,
@@ -2644,8 +2739,11 @@ function App() {
           );
 
         for (const range of candidateRanges) {
+          const dayMinSlot = isPlanningCurrentWeek && dayIndex === todayDayIndex ? currentDayMinSlot : 0;
           const earliestSlotInRange =
-            earliestPlacement && dayIndex === earliestPlacement.dayIndex ? earliestPlacement.slot : 0;
+            earliestPlacement && dayIndex === earliestPlacement.dayIndex
+              ? Math.max(earliestPlacement.slot, dayMinSlot)
+              : dayMinSlot;
           const rangeStart = Math.max(range.startSlot, earliestSlotInRange);
           const latestStart = range.endSlot - neededSlots;
           if (latestStart < rangeStart) continue;
@@ -3243,6 +3341,36 @@ function App() {
     );
   }
 
+  const showMobileBacklogDrawer = viewMode === 'plan' && isMobileViewport();
+  const showDesktopBacklogDrawer = viewMode === 'plan' && !isMobileViewport();
+  const layoutClassName = [
+    'layout',
+    viewMode === 'kanban' ? 'kanban-only' : '',
+    showDesktopBacklogDrawer ? 'plan-with-drawer' : '',
+    showDesktopBacklogDrawer && !desktopBacklogOpen ? 'desktop-backlog-collapsed' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const renderDesktopTabChevron = (direction: 'left' | 'right') => (
+    <svg
+      className="desktop-backlog-toggle-icon"
+      viewBox="0 0 20 20"
+      width="16"
+      height="16"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d={direction === 'left' ? 'M12.5 4.5L7 10l5.5 5.5' : 'M7.5 4.5L13 10l-5.5 5.5'}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+
   return (
     <div className={`planner-shell grain-bg view-${viewMode} ${headerCollapsed ? 'header-collapsed' : ''}`}>
       <section className="header-hero">
@@ -3418,11 +3546,38 @@ function App() {
         </div>
       )}
 
-      <div className={`layout ${viewMode === 'kanban' ? 'kanban-only' : ''}`}>
+      <div className={layoutClassName}>
+        {showDesktopBacklogDrawer && !desktopBacklogOpen && (
+          <button
+            type="button"
+            className="desktop-backlog-toggle closed"
+            aria-label="Expand tasks drawer"
+            title="Expand tasks drawer"
+            aria-expanded={false}
+            aria-controls="desktop-backlog-drawer"
+            onClick={() => setDesktopBacklogOpen(true)}
+          >
+            {renderDesktopTabChevron('right')}
+          </button>
+        )}
         <aside
+          id="desktop-backlog-drawer"
           data-drop-backlog="1"
-          className={`backlog-panel ${viewMode === 'plan' ? 'plan-sticky' : ''} ${dragOverBacklog ? 'drop-active' : ''}`}
+          className={`backlog-panel ${viewMode === 'plan' ? 'plan-sticky' : ''} ${showDesktopBacklogDrawer ? 'desktop-drawer' : ''} ${dragOverBacklog ? 'drop-active' : ''}`}
         >
+          {showDesktopBacklogDrawer && desktopBacklogOpen && (
+            <button
+              type="button"
+              className="desktop-backlog-toggle open"
+              aria-label="Collapse tasks drawer"
+              title="Collapse tasks drawer"
+              aria-expanded
+              aria-controls="desktop-backlog-drawer"
+              onClick={() => setDesktopBacklogOpen(false)}
+            >
+              {renderDesktopTabChevron('left')}
+            </button>
+          )}
           <h2>{viewMode === 'plan' ? 'Tasks' : 'Unscheduled'}</h2>
 
           <div className="new-task-row">
@@ -3479,60 +3634,78 @@ function App() {
         </aside>
 
         {viewMode === 'kanban' ? (
-          <section className="kanban-board">
-            {KANBAN_COLUMNS.map((column) => {
-              const tasksInStatus = sortTasksByWeeklySchedule(
-                kanbanVisibleTasks.filter((task) => column.statuses.includes(task.status)),
-                kanbanOrder,
-              );
-
-              return (
-                <div
-                  key={column.label}
-                  data-drop-status={column.dropStatus}
-                  className={`kanban-column ${dragOverStatus === column.dropStatus ? 'drop-active' : ''}`}
-                >
-                  <h3>{column.label}</h3>
-                  <div className="task-stack">
-                    {tasksInStatus.map((task, index) => (
-                      <div key={task.id} data-kanban-status={column.dropStatus} data-kanban-index={index}>
-                        {draggingTaskId &&
-                          dragOverStatus === column.dropStatus &&
-                          kanbanDropTarget?.status === column.dropStatus &&
-                          kanbanDropTarget.insertIndex === index && <div className="backlog-drop-line" />}
-                        <TaskCard
-                          task={task}
-                          compact
-                          showDuration
-                          showMeta
-                          showIndicators
-                          scheduleBadge={task.scheduled ? KANBAN_DAY_NAMES[task.scheduled.dayIndex] : undefined}
-                          scheduleTooltip={
-                            task.scheduled
-                              ? scheduledTooltip(task.scheduled.weekKey, task.scheduled.dayIndex)
-                              : undefined
-                          }
-                          onOpenDetails={() => setTaskInModal(task.id)}
-                          onToggleComplete={() =>
-                            void patchTask(task.id, {
-                              completed: !task.completed,
-                              status: !task.completed ? 'Done' : task.status === 'Done' ? 'Not Started' : task.status,
-                            })
-                          }
-                          onHandlePointerDown={(event) => onTaskHandlePointerDown(task.id, event)}
-                          onRequestContextMenu={(event) => openTaskContextMenu(task.id, event)}
-                          isDragging={draggingTaskId === task.id}
-                        />
-                      </div>
-                    ))}
-                    {draggingTaskId &&
-                      dragOverStatus === column.dropStatus &&
-                      kanbanDropTarget?.status === column.dropStatus &&
-                      kanbanDropTarget.insertIndex === tasksInStatus.length && <div className="backlog-drop-line" />}
-                  </div>
+          <section className="kanban-area" ref={kanbanAreaRef}>
+            <div className="kanban-pill-layer" aria-hidden="true">
+              {fixedKanbanPills.map((pill) => (
+                <div key={`kanban-pill-${pill.key}`} className="day-scroll-pill" style={{ left: pill.left }}>
+                  {pill.label}
                 </div>
-              );
-            })}
+              ))}
+            </div>
+            <section className="kanban-board">
+              {KANBAN_COLUMNS.map((column) => {
+                const tasksInStatus = sortTasksByWeeklySchedule(
+                  kanbanVisibleTasks.filter((task) => column.statuses.includes(task.status)),
+                  kanbanOrder,
+                );
+
+                return (
+                  <div
+                    key={column.label}
+                    data-drop-status={column.dropStatus}
+                    className={`kanban-column ${dragOverStatus === column.dropStatus ? 'drop-active' : ''}`}
+                    ref={(element) => {
+                      kanbanColumnRefs.current[column.dropStatus] = element;
+                    }}
+                  >
+                    <h3
+                      ref={(element) => {
+                        kanbanHeaderRefs.current[column.dropStatus] = element;
+                      }}
+                    >
+                      {column.label}
+                    </h3>
+                    <div className="task-stack">
+                      {tasksInStatus.map((task, index) => (
+                        <div key={task.id} data-kanban-status={column.dropStatus} data-kanban-index={index}>
+                          {draggingTaskId &&
+                            dragOverStatus === column.dropStatus &&
+                            kanbanDropTarget?.status === column.dropStatus &&
+                            kanbanDropTarget.insertIndex === index && <div className="backlog-drop-line" />}
+                          <TaskCard
+                            task={task}
+                            compact
+                            showDuration
+                            showMeta
+                            showIndicators
+                            scheduleBadge={task.scheduled ? KANBAN_DAY_NAMES[task.scheduled.dayIndex] : undefined}
+                            scheduleTooltip={
+                              task.scheduled
+                                ? scheduledTooltip(task.scheduled.weekKey, task.scheduled.dayIndex)
+                                : undefined
+                            }
+                            onOpenDetails={() => setTaskInModal(task.id)}
+                            onToggleComplete={() =>
+                              void patchTask(task.id, {
+                                completed: !task.completed,
+                                status: !task.completed ? 'Done' : task.status === 'Done' ? 'Not Started' : task.status,
+                              })
+                            }
+                            onHandlePointerDown={(event) => onTaskHandlePointerDown(task.id, event)}
+                            onRequestContextMenu={(event) => openTaskContextMenu(task.id, event)}
+                            isDragging={draggingTaskId === task.id}
+                          />
+                        </div>
+                      ))}
+                      {draggingTaskId &&
+                        dragOverStatus === column.dropStatus &&
+                        kanbanDropTarget?.status === column.dropStatus &&
+                        kanbanDropTarget.insertIndex === tasksInStatus.length && <div className="backlog-drop-line" />}
+                    </div>
+                  </div>
+                );
+              })}
+            </section>
           </section>
         ) : (
           <>
@@ -3722,6 +3895,97 @@ function App() {
           </>
         )}
       </div>
+
+      {showMobileBacklogDrawer && (
+        <>
+          <button
+            type="button"
+            className={`mobile-backlog-toggle ${mobileBacklogOpen ? 'open' : ''}`}
+            aria-expanded={mobileBacklogOpen}
+            aria-controls="mobile-backlog-drawer"
+            aria-label={mobileBacklogOpen ? 'Close tasks drawer' : 'Open tasks drawer'}
+            onClick={() => setMobileBacklogOpen((current) => !current)}
+          >
+            {mobileBacklogOpen ? <ListChevronsDownUp size={22} /> : <ListChevronsUpDown size={22} />}
+          </button>
+
+          <aside
+            id="mobile-backlog-drawer"
+            data-drop-backlog="1"
+            className={`mobile-backlog-drawer ${mobileBacklogOpen ? 'open' : ''} ${dragOverBacklog ? 'drop-active' : ''}`}
+            aria-hidden={!mobileBacklogOpen}
+          >
+            <header className="mobile-backlog-header">
+              <div>
+                <h2>Tasks</h2>
+                <p>{backlogTasks.length} task{backlogTasks.length === 1 ? '' : 's'}</p>
+              </div>
+            </header>
+
+            <form
+              className="new-task-row mobile-backlog-new-task"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void handleCreateTask();
+              }}
+            >
+              <input
+                placeholder="Add task"
+                value={newTaskTitle}
+                onChange={(event) => setNewTaskTitle(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    void handleCreateTask();
+                  }
+                }}
+              />
+              <button
+                type="submit"
+                className="icon-text-button"
+                aria-label="Add backlog task"
+                disabled={!newTaskTitle.trim() || saving}
+                onClick={() => void handleCreateTask()}
+              >
+                <Plus size={15} />
+              </button>
+            </form>
+
+            <div className="mobile-backlog-scroll">
+              <div className="task-stack">
+                {backlogTasks.length === 0 ? (
+                  <p className="muted">No backlog tasks yet.</p>
+                ) : (
+                  backlogTasks.map((task, index) => (
+                    <div key={task.id} data-backlog-index={index}>
+                      {draggingTaskId && dragOverBacklog && backlogInsertIndex === index && <div className="backlog-drop-line" />}
+                      <TaskCard
+                        task={task}
+                        compact
+                        showDuration={false}
+                        showMeta
+                        showIndicators
+                        onOpenDetails={() => setTaskInModal(task.id)}
+                        onToggleComplete={() =>
+                          void patchTask(task.id, {
+                            completed: !task.completed,
+                            status: !task.completed ? 'Done' : task.status === 'Done' ? 'Not Started' : task.status,
+                          })
+                        }
+                        onHandlePointerDown={(event) => onTaskHandlePointerDown(task.id, event)}
+                        onRequestContextMenu={(event) => openTaskContextMenu(task.id, event)}
+                        isDragging={draggingTaskId === task.id}
+                      />
+                    </div>
+                  ))
+                )}
+                {draggingTaskId && dragOverBacklog && backlogInsertIndex === backlogTasks.length && (
+                  <div className="backlog-drop-line" />
+                )}
+              </div>
+            </div>
+          </aside>
+        </>
+      )}
 
       {modalTask && (
         <TaskModal
@@ -4026,7 +4290,13 @@ function App() {
                     disabled={saving}
                     onClick={() => void handleAssignExistingTaskToMobileSlot(task.id)}
                   >
-                    {task.title}
+                    <span className="mobile-slot-task-option-title">{task.title}</span>
+                    {(task.activity || task.client.trim()) && (
+                      <span className="mobile-slot-task-option-meta">
+                        {task.activity && <span className="mobile-slot-task-activity">{task.activity}</span>}
+                        {task.client.trim() && <span className="mobile-slot-task-project">{task.client.trim()}</span>}
+                      </span>
+                    )}
                   </button>
                 ))
               )}

@@ -21,6 +21,10 @@ export function MarketingLanding() {
         </a>
         <p className="marcom-legal">
           <a href="/privacy.html">Privacy Policy</a>
+          <span aria-hidden="true">•</span>
+          <a href="/terms.html">Terms of Service</a>
+          <span aria-hidden="true">•</span>
+          <a href="/data-deletion.html">Data Deletion</a>
         </p>
       </main>
     </div>
