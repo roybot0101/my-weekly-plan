@@ -595,7 +595,7 @@ textarea {
 @media (min-width: 1121px) {
   .top-controls {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     align-items: center;
     column-gap: 12px;
   }
@@ -603,16 +603,21 @@ textarea {
   .week-nav-row {
     min-width: 0;
     flex-wrap: nowrap;
+    grid-column: 2;
+    justify-self: center;
   }
 
   .view-toggle {
+    grid-column: 3;
     justify-self: end;
     flex-shrink: 0;
     margin-left: 0;
   }
 
   .tempo-cta-group {
-    justify-self: center;
+    grid-column: 1;
+    justify-self: start;
+    min-width: 0;
   }
 
   .account-row {
@@ -3653,6 +3658,18 @@ textarea {
   color: #8f3f30;
   border-radius: var(--radius-sm);
   padding: 9px 11px;
+}
+
+.info-banner {
+  border: 1px solid #b8d8c6;
+  background: #eaf5ee;
+  color: #275a3f;
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+}
+
+.auth-resend-actions {
+  justify-content: center;
 }
 
 .status-slot {

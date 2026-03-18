@@ -52,6 +52,7 @@ import {
   signOut,
   signUp,
   signInWithOAuth,
+  resendConfirmationEmail,
   changePassword,
   deleteAccount,
   updateBacklogOrder,
@@ -449,6 +450,7 @@ function App() {
   const [authMode, setAuthMode] = useState<AuthMode>('sign-in');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [authInfoMessage, setAuthInfoMessage] = useState<string | null>(null);
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [backlogOrder, setBacklogOrder] = useState<string[]>([]);
@@ -3203,6 +3205,7 @@ function App() {
     if (!email.trim() || !password) return;
 
     setInitializing(true);
+    setAuthInfoMessage(null);
     try {
       if (authMode === 'sign-up') {
         await signUp(email.trim(), password);
@@ -3220,6 +3223,7 @@ function App() {
 
   async function handleOAuth(provider: 'google' | 'facebook') {
     setInitializing(true);
+    setAuthInfoMessage(null);
     try {
       await signInWithOAuth(provider);
       setErrorMessage(null);
@@ -3228,6 +3232,31 @@ function App() {
       setInitializing(false);
     }
   }
+
+  async function handleResendConfirmationEmail() {
+    const emailAddress = email.trim();
+    if (!emailAddress) {
+      setErrorMessage('Enter your email so Tempo can resend your confirmation link.');
+      return;
+    }
+
+    setInitializing(true);
+    setAuthInfoMessage(null);
+    try {
+      await resendConfirmationEmail(emailAddress);
+      setErrorMessage(null);
+      setAuthInfoMessage(`Confirmation email sent to ${emailAddress}.`);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to resend confirmation email.');
+    } finally {
+      setInitializing(false);
+    }
+  }
+
+  const shouldShowResendConfirmationAction =
+    !userId &&
+    Boolean(errorMessage) &&
+    /(email[_ ]not[_ ]confirmed|email.*not confirmed|not confirmed)/i.test(errorMessage ?? '');
 
   if (!hasSupabaseEnv) {
     return (
@@ -3266,6 +3295,14 @@ function App() {
           <p>Turn your to-do list into a calm, doable week.</p>
 
           {errorMessage && <div className="error-banner">{errorMessage}</div>}
+          {authInfoMessage && <div className="info-banner">{authInfoMessage}</div>}
+          {shouldShowResendConfirmationAction && (
+            <div className="auth-actions auth-resend-actions">
+              <button onClick={() => void handleResendConfirmationEmail()} disabled={initializing}>
+                Resend confirmation email
+              </button>
+            </div>
+          )}
 
           <label>
             Email
@@ -3273,7 +3310,10 @@ function App() {
               type="email"
               placeholder="you@example.com"
               value={email}
-              onChange={(event) => setEmail(event.target.value)}
+              onChange={(event) => {
+                setEmail(event.target.value);
+                setAuthInfoMessage(null);
+              }}
               onKeyDown={(event) => event.key === 'Enter' && void handleAuthSubmit()}
             />
           </label>
@@ -3293,6 +3333,7 @@ function App() {
               onClick={() => {
                 setAuthMode((current) => (current === 'sign-in' ? 'sign-up' : 'sign-in'));
                 setErrorMessage(null);
+                setAuthInfoMessage(null);
               }}
             >
               {authMode === 'sign-up' ? 'Use Existing Account' : 'Create New Account'}

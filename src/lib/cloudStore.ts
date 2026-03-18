@@ -276,6 +276,18 @@ export async function signUp(email: string, password: string) {
   if (error) throw error;
 }
 
+export async function resendConfirmationEmail(email: string) {
+  const client = requireClient();
+  const { error } = await client.auth.resend({
+    type: 'signup',
+    email,
+    options: {
+      emailRedirectTo: `${window.location.origin}/`,
+    },
+  });
+  if (error) throw error;
+}
+
 export async function signInWithOAuth(provider: 'google' | 'facebook') {
   const client = requireClient();
   const { error } = await client.auth.signInWithOAuth({
