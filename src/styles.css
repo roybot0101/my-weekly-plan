@@ -138,6 +138,14 @@ button {
   gap: 6px;
 }
 
+.app-button-standard {
+  min-height: 34px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  font-size: 0.84rem;
+  line-height: 1;
+}
+
 .icon-text-button svg {
   transform: translateY(0);
   margin-right: 0;
@@ -316,13 +324,116 @@ textarea {
   letter-spacing: -0.01em;
 }
 
-.marcom-video-wrap {
-  width: min(860px, 100%);
+.marcom-copy {
+  margin: 0;
+  width: min(700px, 100%);
+  text-align: center;
+  text-wrap: pretty;
+  color: #5d564d;
+  font-size: clamp(0.98rem, 1.5vw, 1.15rem);
+  line-height: 1.6;
+}
+
+.marcom-feature-grid {
+  width: min(900px, 100%);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+
+.marcom-feature-card {
   border: 1px solid rgba(142, 122, 174, 0.2);
-  border-radius: 22px;
-  overflow: hidden;
-  box-shadow: 0 12px 28px rgba(66, 56, 44, 0.12);
-  background: #000;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 8px 22px rgba(66, 56, 44, 0.08);
+  padding: 14px 12px;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.marcom-feature-card svg {
+  color: var(--tempo-strong);
+}
+
+.marcom-feature-card p {
+  margin: 0;
+  color: #4f493f;
+  font-size: clamp(0.9rem, 1.2vw, 1rem);
+  line-height: 1.45;
+}
+
+.marcom-waitlist {
+  width: min(700px, 100%);
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid rgba(142, 122, 174, 0.24);
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, rgba(243, 236, 251, 0.58) 100%);
+}
+
+.marcom-waitlist-title {
+  margin: 0;
+  text-align: center;
+  color: #433f38;
+  font-size: clamp(1.05rem, 2.1vw, 1.3rem);
+  font-weight: 700;
+}
+
+.marcom-waitlist-form {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.marcom-waitlist-form input {
+  min-height: 50px;
+  border-radius: 999px;
+  border-color: rgba(142, 122, 174, 0.38);
+  background: rgba(255, 255, 255, 0.94);
+  padding: 0 16px;
+}
+
+.marcom-waitlist-button {
+  min-height: 50px;
+  padding: 0 22px;
+  border-radius: 999px;
+  border-width: 1px;
+  font-size: 1rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.marcom-waitlist-button:disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.marcom-waitlist-message {
+  margin: 0;
+  text-align: center;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.marcom-waitlist-message-error {
+  color: #a6533c;
+}
+
+.marcom-waitlist-message-success {
+  color: #3f6d53;
+}
+
+.marcom-waitlist-message a {
+  color: #4b6d8a;
+}
+
+.marcom-fallback-link {
+  color: #4b6d8a;
 }
 
 .marcom-video {
@@ -1022,6 +1133,395 @@ textarea {
   display: none;
 }
 
+.business-view {
+  margin: 12px 16px 0;
+  display: grid;
+  gap: 12px;
+}
+
+.business-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.business-summary-card {
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-soft);
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+}
+
+.business-summary-card p {
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.business-summary-card strong {
+  margin-top: 4px;
+  display: block;
+  font-size: 1rem;
+}
+
+.business-columns {
+  --business-left-width: 60%;
+  display: grid;
+  grid-template-columns:
+    minmax(0, var(--business-left-width))
+    14px
+    minmax(0, calc(100% - var(--business-left-width) - 14px));
+  gap: 12px;
+  align-items: start;
+}
+
+.business-flow-note {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #d6c8b5;
+  border-radius: var(--radius-sm);
+  background: #fbf4ea;
+  color: #5d4a32;
+  font-size: 0.84rem;
+}
+
+.business-panel {
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-soft);
+  padding: 10px;
+  display: grid;
+  gap: 7px;
+  align-content: start;
+  grid-auto-rows: max-content;
+}
+
+.business-column-resizer {
+  align-self: stretch;
+  width: 14px;
+  min-width: 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  padding: 0;
+  cursor: col-resize;
+  display: grid;
+  place-items: center;
+}
+
+.business-column-resizer span {
+  width: 4px;
+  height: 100%;
+  min-height: 160px;
+  border-radius: 999px;
+  background: rgba(190, 174, 153, 0.55);
+  transition: background 140ms ease;
+}
+
+.business-column-resizer:hover span,
+.business-column-resizer:focus-visible span {
+  background: rgba(145, 129, 109, 0.78);
+}
+
+.business-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.business-panel-header h3 {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.9rem;
+  line-height: 1.1;
+}
+
+.business-filter-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.2fr) repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  align-items: center;
+}
+
+.business-search-wrap {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  padding: 0 10px;
+}
+
+.business-search-wrap svg {
+  color: #6b6358;
+}
+
+.business-search-wrap input {
+  border: 0;
+  background: transparent;
+  padding-left: 0;
+  box-shadow: none;
+}
+
+.business-search-wrap input:focus-visible {
+  outline: none;
+}
+
+.business-search-wrap:focus-within {
+  outline: 2px solid rgba(123, 151, 133, 0.65);
+  outline-offset: 1px;
+}
+
+.business-form {
+  display: grid;
+  gap: 8px;
+}
+
+.business-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.business-inline-input {
+  display: flex;
+  gap: 8px;
+}
+
+.business-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.business-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.business-table th,
+.business-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #ece4d8;
+  white-space: nowrap;
+  text-align: left;
+  line-height: 1.25;
+  vertical-align: top;
+}
+
+.business-table thead th {
+  background: #f8f2e9;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  line-height: 1.1;
+}
+
+.business-table .business-empty-row {
+  text-align: center;
+  color: var(--muted);
+  white-space: normal;
+}
+
+.table-link-button {
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+  color: #5a503f;
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.table-link-button:hover {
+  transform: none;
+  border-color: transparent;
+  background: transparent;
+  color: #413a2f;
+}
+
+.business-inline-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.table-action-button {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  line-height: 1.1;
+  background: #f7f2ea;
+}
+
+.business-expense-add-button {
+  min-height: 36px;
+  padding-inline: 12px;
+  font-size: 0.86rem;
+}
+
+.business-expense-add-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.business-expense-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.business-expense-search {
+  width: 220px;
+  min-width: 180px;
+}
+
+.business-expense-search input {
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+.business-modal {
+  width: min(640px, 100%);
+}
+
+.business-notice-modal {
+  width: min(460px, 100%);
+}
+
+.business-notice-copy {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.4;
+}
+
+.business-client-projects {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  padding: 8px 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.business-client-projects h4 {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.business-client-projects ul {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 4px;
+}
+
+.business-client-projects li {
+  min-height: 18px;
+}
+
+.business-receipt-uploader {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  padding: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.business-receipt-list {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 5px;
+}
+
+.business-receipt-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.business-receipt-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 0.72rem;
+  background: #f7f2ea;
+}
+
+@media (max-width: 1220px) {
+  .business-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .business-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .business-column-resizer {
+    display: none;
+  }
+
+  .business-filter-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .business-view {
+    margin-left: 8px;
+    margin-right: 8px;
+  }
+
+  .business-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .business-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .business-filter-row {
+    grid-template-columns: 1fr;
+  }
+
+  .business-panel-header {
+    flex-wrap: wrap;
+  }
+
+  .business-expense-toolbar {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .business-expense-search {
+    width: min(100%, 280px);
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .business-table {
+    font-size: 0.76rem;
+  }
+}
+
 .backlog-panel,
 .kanban-column,
 .day-column {
@@ -1080,6 +1580,10 @@ textarea {
   display: flex;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+.new-task-row select {
+  max-width: 250px;
 }
 
 .new-task-row button:disabled {
@@ -2113,7 +2617,6 @@ textarea {
 }
 
 .task-modal-header,
-.task-modal-footer,
 .section-title-row,
 .inline-row {
   display: flex;
@@ -2181,6 +2684,28 @@ textarea {
   font-size: 0.98rem;
   font-weight: 500;
   line-height: 1;
+}
+
+.task-modal .inline-checkbox-row {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 0.89rem;
+  font-weight: 400;
+  line-height: 1.2;
+}
+
+.task-modal .inline-checkbox-row input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex: 0 0 auto;
 }
 
 .task-modal .priority-toggle input {
@@ -2787,6 +3312,10 @@ textarea {
 }
 
 .task-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
   flex-shrink: 0;
   margin-top: 2px;
   padding-top: 8px;
@@ -3337,6 +3866,12 @@ textarea {
 
   .mobile-backlog-new-task {
     margin-bottom: 8px;
+    flex-wrap: wrap;
+  }
+
+  .mobile-backlog-new-task select {
+    width: 100%;
+    max-width: none;
   }
 
   .mobile-backlog-scroll {
@@ -3508,8 +4043,33 @@ textarea {
     font-size: 1.18rem;
   }
 
-  .marcom-video-wrap {
+  .marcom-copy {
+    font-size: 0.98rem;
+    line-height: 1.5;
+  }
+
+  .marcom-feature-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .marcom-feature-card p {
+    font-size: 0.94rem;
+    line-height: 1.4;
+  }
+
+  .marcom-waitlist {
     border-radius: 16px;
+    padding: 14px;
+  }
+
+  .marcom-waitlist-form {
+    flex-direction: column;
+  }
+
+  .marcom-waitlist-form input,
+  .marcom-waitlist-button {
+    width: 100%;
   }
 
   .marcom-cta {
